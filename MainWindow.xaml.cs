@@ -68,6 +68,7 @@ public partial class MainWindow : Window
             {
                 AzSlider.Value = az; ElSlider.Value = el; _aimAzimuth = _aimElevation = null;
                 Checks.Text = "■ 표적 할당                         OK\n■ 발사대 조준                       OK\n■ 레이저 준비                       OK";
+                AssignButton.Content = "할당 완료 ✓";
                 AddLog("READY", "표적 자동 조준 완료");
             }
         }
@@ -86,7 +87,7 @@ public partial class MainWindow : Window
             status.Text = "SIM KILL";
             status.Foreground = new SolidColorBrush(Color.FromRgb(0, 233, 139));
             AddLog("SIM", $"{SelectedTarget.Text} 모의 격추 완료");
-            _isAssigned = false; AssignmentStatus.Text = "— 다음 표적 대기 —"; AssignButton.Content = "표적 할당 →";
+            _isAssigned = false; AssignmentStatus.Text = "— 다음 표적 대기 —"; AssignButton.Content = "표적 할당 →"; AssignButton.IsEnabled = true;
             Checks.Text = "■ 표적 할당                         READY\n■ 발사대 조준                       READY\n■ 레이저 준비                       OK";
             FireButton.Content = "●   발사 명령";
             _activeTargetDot = null; _activeTargetLabel = null;
@@ -131,13 +132,13 @@ public partial class MainWindow : Window
         };
         SelectedTarget.Text = id; SelectedThreat.Text = "   " + data.Item6;
         AzimuthValue.Text = data.Item1; ElevationValue.Text = data.Item2; DistanceValue.Text = data.Item3; SpeedValue.Text = data.Item4; RcsValue.Text = data.Item5;
-        _isAssigned = false; AssignmentStatus.Text = "— 없음 —"; AssignButton.Content = "표적 할당 →";
+        _isAssigned = false; AssignmentStatus.Text = "— 없음 —"; AssignButton.Content = "표적 할당 →"; AssignButton.IsEnabled = true;
         Checks.Text = "■ 표적 할당                         NG\n■ 발사대 조준                       NG\n■ 레이저 준비                       OK";
     }
 
     private void AssignClick(object sender, RoutedEventArgs e)
     {
-        _isAssigned = true; AssignmentStatus.Text = SelectedTarget.Text; AssignButton.Content = "할당 완료 ✓";
+        _isAssigned = true; AssignmentStatus.Text = SelectedTarget.Text; AssignButton.Content = "표적 할당 중…"; AssignButton.IsEnabled = false;
         // 감지 레이더의 표적 방위각이 아니라, 지도 하단 타격자산에서 표적까지의 실제 방향으로 조준한다.
         var targetPosition = GetTargetMapPosition(SelectedTarget.Text);
         var weaponHeading = Math.Atan2(targetPosition.X - 154, -(targetPosition.Y - 217)) * 180 / Math.PI;
@@ -211,8 +212,8 @@ public partial class MainWindow : Window
 
     private void FireClick(object sender, RoutedEventArgs e)
     {
-        if (!_isAssigned) { MessageBox.Show("먼저 표적을 할당해 주세요.", "발사 통제", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        if (_aimAzimuth is not null) { AddLog("WAIT", "자동 조준 완료 후 모의 발사가 가능합니다."); return; }
+        if (!_isAssigned) { MessageBox.Show("발사 조건에 NG가 있습니다. 표적 할당 및 조준 완료 후 다시 시도해 주세요.", "발사 통제 경고", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+        if (_aimAzimuth is not null) { AddLog("WAIT", "자동 조준 완료 후 모의 발사가 가능합니다."); MessageBox.Show("발사 조건에 NG가 있습니다. 자동 조준이 완료될 때까지 기다려 주세요.", "발사 통제 경고", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         (_activeTargetDot, _activeTargetLabel) = SelectedTarget.Text switch
         {
             "TGT-002" => (Target002Dot, Target002Label),
@@ -220,11 +221,12 @@ public partial class MainWindow : Window
             "TGT-403" => (Target403Dot, Target403Label),
             _ => (Target001Dot, Target001Label)
         };
-        if (_activeTargetDot.Visibility != Visibility.Visible) { AddLog("INFO", "이미 모의 격추된 표적입니다. 다른 표적을 선택하세요."); return; }
+        if (_activeTargetDot.Visibility != Visibility.Visible) { AddLog("INFO", "이미 모의 격추된 표적입니다. 다른 표적을 선택하세요."); MessageBox.Show("선택한 표적은 이미 격추되었습니다. 다른 표적을 선택해 주세요.", "발사 통제 경고", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
         SimulationBeam.X2 = Canvas.GetLeft(_activeTargetDot) + _activeTargetDot.Width / 2;
         SimulationBeam.Y2 = Canvas.GetTop(_activeTargetDot) + _activeTargetDot.Height / 2;
         SimulationBeam.Opacity = 1; _interceptTicks = 50; FireButton.Content = "● 모의 교전 진행…";
         AddLog("FIRE", $"{SelectedTarget.Text} 모의 발사 명령 전송");
+        MessageBox.Show($"{SelectedTarget.Text}에 대한 모의 발사 명령을 전송했습니다.", "발사 명령", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void ToggleManualControl(object sender, RoutedEventArgs e)

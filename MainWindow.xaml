@@ -164,7 +164,8 @@
       <Grid Grid.Column="1">
         <Grid.RowDefinitions>
           <RowDefinition Height="40"/>
-          <RowDefinition Height="357"/>
+          <RowDefinition Height="2*" MinHeight="150"/>
+          <RowDefinition Height="6"/>
           <RowDefinition Height="168"/>
           <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
@@ -282,7 +283,8 @@
             </Grid>
           </Button>
         </StackPanel>
-        <Border Grid.Row="2" BorderBrush="#193A2E" BorderThickness="0,1">
+        <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#1B4336" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" ShowsPreview="True" Cursor="SizeNS" ToolTip="드래그하여 표적 목록 높이 조절"/>
+        <Border Grid.Row="3" BorderBrush="#193A2E" BorderThickness="0,1">
           <StackPanel Margin="16,12">
             <StackPanel Orientation="Horizontal">
               <TextBlock x:Name="SelectedTarget" Text="TGT-001" Foreground="#FF7800" FontWeight="Bold" FontSize="15"/>
@@ -323,7 +325,7 @@
             <Button x:Name="AssignButton" Content="&#xD45C;&#xC801; &#xD560;&#xB2F9; &#x2192;" Click="AssignClick" Width="116" Height="31" HorizontalAlignment="Left" Background="#064E32" BorderBrush="#00ED91" Foreground="#00F19A" FontWeight="Bold"/>
           </StackPanel>
         </Border>
-        <Grid Grid.Row="3" Margin="12,10"><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><DockPanel><TextBlock Style="{StaticResource S}" Margin="0" Text="┃ 이벤트 로그" DockPanel.Dock="Left"/><Button Content="로그 열기" Click="OpenLogClick" DockPanel.Dock="Right" Padding="5,1" FontSize="10" Background="#08251B" Foreground="#00E98B" BorderBrush="#1B4336"/></DockPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#C7E9D6" FontSize="11"/></Grid>
+        <Grid Grid.Row="4" Margin="12,10"><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><DockPanel><TextBlock Style="{StaticResource S}" Margin="0" Text="┃ 이벤트 로그" DockPanel.Dock="Left"/><Button Content="로그 열기" Click="OpenLogClick" DockPanel.Dock="Right" Padding="5,1" FontSize="10" Background="#08251B" Foreground="#00E98B" BorderBrush="#1B4336"/></DockPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#C7E9D6" FontSize="11"/></Grid>
       </Grid>
       <Border Grid.Column="2" BorderBrush="#193A2E" BorderThickness="1,0,0,0">
         <Grid>
@@ -409,12 +411,9 @@
       </Border>
     </Grid>
     <Border Grid.Row="2" BorderBrush="#193A2E" BorderThickness="0,1,0,0">
-      <DockPanel Margin="16,0">
-        <TextBlock Text="&#xC804;&#xB825;" Foreground="#4E9876" VerticalAlignment="Center"/>
-        <ProgressBar Value="94" Width="200" Height="5" Margin="14,0" Foreground="#00E98B" VerticalAlignment="Center"/>
-        <TextBlock Text="94%" Foreground="#00E98B" FontWeight="Bold" VerticalAlignment="Center"/>
-        <TextBlock Text="&#xC2DC;&#xC2A4;&#xD15C; &#xC815;&#xC0C1; &#xC6B4;&#xC6A9;      &#xD45C;&#xC801; 4 / &#xCD94;&#xC801; 0      &#xBC1C;&#xC0AC;&#xB300;: AZ 47&#xB0; / EL 22&#xB0;" Foreground="#4E9876" VerticalAlignment="Center" Margin="20,0"/>
-      </DockPanel>
+            <DockPanel Margin="16,0">
+                <TextBlock Text="시스템 정상 운용" Foreground="#4E9876" VerticalAlignment="Center" Margin="20,0"/>
+            </DockPanel>
     </Border>
   </Grid>
 </Window>
