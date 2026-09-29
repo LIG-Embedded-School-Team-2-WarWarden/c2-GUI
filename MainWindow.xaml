@@ -73,6 +73,9 @@
           </Grid.RowDefinitions>
           <DockPanel><TextBlock Style="{StaticResource S}" Text="┃ 탐지 레이더  ·  AZ −135° ~ +135° / 270°" DockPanel.Dock="Left"/><TextBlock x:Name="ScanAzimuthText" Text="SCAN +0.0°" Foreground="#00E98B" FontSize="10" Margin="0,13,12,0" DockPanel.Dock="Right"/></DockPanel>
           <Canvas Grid.Row="1" Margin="18,0" Width="310" Height="310" ClipToBounds="True">
+            <!-- 사각형 전체 작전 지도 위에 이동하는 원형 레이더 탐지범위를 오버레이 -->
+            <Rectangle Width="310" Height="310" Fill="#071A14" Stroke="#1A4A3A" StrokeThickness="1"/>
+            <Path Data="M18,40 L292,40 M18,95 L292,95 M18,150 L292,150 M18,205 L292,205 M18,260 L292,260 M55,18 L55,292 M110,18 L110,292 M165,18 L165,292 M220,18 L220,292 M275,18 L275,292" Stroke="#123B2D" StrokeThickness="0.6" StrokeDashArray="2 5"/>
             <!-- 레이더 링과 제주도 작전 지도 -->
             <Ellipse Width="275" Height="275" Stroke="#1A4A3A" StrokeThickness="1.2" Canvas.Left="17" Canvas.Top="17"/>
             <Ellipse Width="205" Height="205" Stroke="#123126" StrokeDashArray="3 4" Canvas.Left="52" Canvas.Top="52"/>
@@ -82,23 +85,26 @@
             <Line X1="58" Y1="58" X2="250" Y2="250" Stroke="#112A21"/>
             <Line X1="250" Y1="58" X2="58" Y2="250" Stroke="#112A21"/>
             <!-- 0°는 상단 중앙. 모터는 −135°~+135°를 왕복하고 스캔 빔은 100° 폭으로 펼쳐진다. -->
-            <Path x:Name="DetectionSweep" Data="M154,154 L51,68 A134,134 0 0 1 257,68 Z" Fill="#00E98B" Opacity="0.12">
+                        <Path x:Name="DetectionSweep" Panel.ZIndex="4" Data="M154,154 L51,68 A134,134 0 0 1 257,68 Z" Fill="#00E98B" Opacity="0.12">
               <Path.RenderTransform>
-                <RotateTransform x:Name="SweepTransform" CenterX="154" CenterY="154" Angle="-60"/>
+                <TransformGroup><RotateTransform x:Name="SweepTransform" CenterX="154" CenterY="154" Angle="-60"/><TranslateTransform x:Name="SweepRangeTransform"/></TransformGroup>
               </Path.RenderTransform>
             </Path>
-            <Path Data="M73,166 C83,145 108,135 126,131 C145,119 174,116 198,124 C219,124 240,135 246,151 C254,163 251,178 239,185 C226,197 205,198 190,205 C166,216 145,207 130,211 C112,211 98,199 87,190 C74,184 68,175 73,166 Z" Fill="#0B2920" Stroke="#28745A" StrokeThickness="1.4" Opacity="0.92">
+            <Path Data="M73,166 C83,145 108,135 126,131 C145,119 174,116 198,124 C219,124 240,135 246,151 C254,163 251,178 239,185 C226,197 205,198 190,205 C166,216 145,207 130,211 C112,211 98,199 87,190 C74,184 68,175 73,166 Z" Fill="#0B2920" Stroke="#28745A" StrokeThickness="1.4" Opacity="0.62">
               <Path.RenderTransform>
-                <ScaleTransform CenterX="154" CenterY="165" ScaleX="1.22" ScaleY="1.22"/>
+                <ScaleTransform CenterX="154" CenterY="165" ScaleX="1.6" ScaleY="1.6"/>
               </Path.RenderTransform>
             </Path>
             <Path Data="M89,166 C119,151 140,164 161,148 C180,134 207,142 237,156 M100,190 C128,180 148,192 171,181 C192,171 211,178 234,173 M130,138 L143,205 M182,126 L192,201" Stroke="#195340" StrokeThickness="0.8" Fill="Transparent">
               <Path.RenderTransform>
-                <ScaleTransform CenterX="154" CenterY="165" ScaleX="1.22" ScaleY="1.22"/>
+                <ScaleTransform CenterX="154" CenterY="165" ScaleX="1.6" ScaleY="1.6"/>
               </Path.RenderTransform>
             </Path>
             <TextBlock Text="JEJU ISLAND" Foreground="#3A8A69" FontSize="8" FontWeight="Bold" Canvas.Left="123" Canvas.Top="157" Opacity="0.8"/>
             <!-- 중앙 감지자산 -->
+            <!-- 감지자산 회전 가능 범위: 원호 없이 작은 ^ 형태의 점선 -->
+            <Line X1="154" Y1="154" X2="112" Y2="192" Stroke="#00C878" StrokeThickness="1" StrokeDashArray="3 3"/>
+            <Line X1="154" Y1="154" X2="196" Y2="192" Stroke="#00C878" StrokeThickness="1" StrokeDashArray="3 3"/>
             <Canvas x:Name="DetectionAsset" Width="48" Height="48" Canvas.Left="132" Canvas.Top="133"><Canvas.RenderTransform><RotateTransform x:Name="DetectionAssetTransform" CenterX="21" CenterY="21"/></Canvas.RenderTransform><Ellipse Width="43" Height="43" Stroke="#00E98B" StrokeThickness="1" StrokeDashArray="2 2"/><Ellipse Width="15" Height="15" Fill="#063B28" Stroke="#00F19A" StrokeThickness="2" Canvas.Left="14" Canvas.Top="14"/><Line X1="21" Y1="21" X2="21" Y2="3" Stroke="#00E98B" StrokeThickness="2"/><Ellipse Width="5" Height="5" Fill="#C8FFE4" Canvas.Left="19" Canvas.Top="19"/></Canvas>
             <!-- 하단 타격자산: 방위각은 회전, 고각은 위치와 포신 고도로 반영 -->
             <Canvas x:Name="StrikeAsset" Width="42" Height="42" Canvas.Left="133" Canvas.Top="196">
