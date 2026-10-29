@@ -1,4 +1,16 @@
-.vs/ 
-bin/ 
-obj/ 
-.exe
+# Visual Studio
+.vs/
+
+# Build output
+bin/
+obj/
+
+# Executable files
+*.exe
+
+# Debug symbols
+*.pdb
+
+# Visual Studio user-specific files
+*.suo
+*.user
