@@ -12,7 +12,7 @@ WPF는 C++ `Frame`을 named shared memory에서 읽습니다. `control_mock` 송
 
 WPF는 Named Pipe 클라이언트이고, `EcsMockControlStation`의 C++ 프로그램은 Named Pipe 서버입니다. WPF가 요청을 보내면 같은 연결로 서버가 응답합니다. 서버는 상태를 WPF에 먼저 보내지 않으며, WPF가 1초 간격으로 상태를 조회합니다.
 
-- Pipe 이름: `ECS_NamedPipe_Demo`
+- Pipe 이름: `ECS_NamedPipe`
 - 프로토콜 Magic: `0x50495045`
 - 프로토콜 버전: `2`
 - 요청 구조체: `Pack = 4`, 28바이트
