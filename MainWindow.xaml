@@ -1,425 +1,54 @@
-<?xml version="1.0"?>
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="AadcCommandCenter.MainWindow" Title="AADC-9 &#xB300;&#xACF5;&#xBC29;&#xC5B4; &#xD1B5;&#xC81C; &#xC2DC;&#xC2A4;&#xD15C;" Width="1450" Height="820" MinWidth="1100" MinHeight="680" Background="#030B08" FontFamily="Consolas" Foreground="#A3EEC7">
+<Window x:Class="AadcCommandCenter.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="AADC-9 | 대공방어 통제 시스템" Width="1500" Height="850"
+        MinWidth="760" MinHeight="480" WindowState="Maximized" Background="#07100F" Foreground="#C3D6CE"
+        FontFamily="Consolas" WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown">
   <Window.Resources>
-    <Style TargetType="Border">
-      <Setter Property="BorderBrush" Value="#173B30"/>
-      <Setter Property="BorderThickness" Value="1"/>
-    </Style>
-    <Style x:Key="S" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#00ED91"/>
-      <Setter Property="FontSize" Value="13"/>
-      <Setter Property="FontWeight" Value="Bold"/>
-      <Setter Property="Margin" Value="12,10,0,8"/>
-    </Style>
-    <Style x:Key="C" TargetType="Border">
-      <Setter Property="BorderBrush" Value="#1B4336"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="11,7"/>
-      <Setter Property="Margin" Value="4"/>
-      <Setter Property="Background" Value="#06120E"/>
-    </Style>
-    <Style x:Key="L" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#407D64"/>
-      <Setter Property="FontSize" Value="10"/>
-    </Style>
-    <Style x:Key="V" TargetType="TextBlock">
-      <Setter Property="Foreground" Value="#00E98B"/>
-      <Setter Property="FontSize" Value="16"/>
-      <Setter Property="FontWeight" Value="Bold"/>
-    </Style>
-    <Style x:Key="R" TargetType="Button">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="BorderBrush" Value="#102A21"/>
-      <Setter Property="BorderThickness" Value="0,0,0,1"/>
-      <Setter Property="Foreground" Value="#B9F8D9"/>
-      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-      <Setter Property="Padding" Value="10,10"/>
-      <Setter Property="Cursor" Value="Hand"/>
-    </Style>
+    <SolidColorBrush x:Key="Panel" Color="#0A1413"/><SolidColorBrush x:Key="Line" Color="#1B3831"/>
+    <SolidColorBrush x:Key="Green" Color="#00E68A"/><SolidColorBrush x:Key="Muted" Color="#52796D"/>
+    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#C3D6CE"/><Setter Property="FontFamily" Value="Consolas"/></Style>
+    <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#0D1C19"/><Setter Property="Foreground" Value="#6C9887"/><Setter Property="Padding" Value="8"/><Setter Property="BorderBrush" Value="#1B3831"/></Style>
+    <Style TargetType="DataGridRow"><Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="#C3D6CE"/><Setter Property="BorderBrush" Value="#193A2E"/><Style.Triggers><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#B7F7D8"/><Setter Property="Foreground" Value="#07100F"/></Trigger></Style.Triggers></Style>
+    <Style TargetType="ComboBox"><Setter Property="Background" Value="#B7F7D8"/><Setter Property="Foreground" Value="#071B33"/><Setter Property="BorderBrush" Value="#1B5842"/><Setter Property="Padding" Value="5,3"/></Style>
+    <Style TargetType="Button"><Setter Property="Background" Value="#08251B"/><Setter Property="Foreground" Value="#00E68A"/><Setter Property="BorderBrush" Value="#1B5842"/><Setter Property="Padding" Value="8,4"/></Style>
+    <Style x:Key="FieldCard" TargetType="Border"><Setter Property="BorderBrush" Value="#1B3831"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Background" Value="#0A1413"/><Setter Property="Padding" Value="9"/><Setter Property="Margin" Value="3"/></Style>
   </Window.Resources>
-  <Grid>
-    <Grid.RowDefinitions>
-      <RowDefinition Height="45"/>
-      <RowDefinition Height="*"/>
-      <RowDefinition Height="36"/>
-    </Grid.RowDefinitions>
-    <Border Grid.Row="0" BorderBrush="#193A2E" BorderThickness="0,0,0,1" Background="#06100D">
-      <DockPanel Margin="20,0">
-        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
-          <TextBlock Text="&#x25C7;" FontSize="24" Foreground="#00ED91" Margin="0,0,12,0"/>
-          <TextBlock Text="A A D C - 9   &#xB300; &#xACF5; &#xBC29; &#xC5B4;   &#xD1B5; &#xC81C;   &#xC2DC; &#xC2A4; &#xD15C;" FontSize="15" FontWeight="Bold" Foreground="#00E98B" VerticalAlignment="Center"/>
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
-          <TextBlock Text="&#x25CF; &#xB808;&#xC774;&#xB354; ONLINE" Foreground="#2FCB84" Margin="0,0,28,0"/>
-          <TextBlock Text="&#x25CF; &#xD1B5;&#xC2E0; ONLINE" Foreground="#2FCB84" Margin="0,0,28,0"/>
-          <TextBlock Text="&#x25CF; &#xB808;&#xC774;&#xC800; READY" Foreground="#2FCB84" Margin="0,0,28,0"/>
-          <TextBlock x:Name="ClockText" Text="0000-00-00  00:00:00" Foreground="#4D9576"/>
-        </StackPanel>
-      </DockPanel>
-    </Border>
-    <Grid Grid.Row="1">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="350"/>
-        <ColumnDefinition Width="*"/>
-        <ColumnDefinition Width="325"/>
-      </Grid.ColumnDefinitions>
-      <Border Grid.Column="0" BorderBrush="#193A2E" BorderThickness="0,0,1,0">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="325"/>
-            <RowDefinition Height="125"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <DockPanel><TextBlock Style="{StaticResource S}" Text="┃ 탐지 레이더  ·  AZ −135° ~ +135° / 270°" DockPanel.Dock="Left"/><TextBlock x:Name="ScanAzimuthText" Text="SCAN +0.0°" Foreground="#00E98B" FontSize="10" Margin="0,13,12,0" DockPanel.Dock="Right"/></DockPanel>
-          <Canvas Grid.Row="1" Margin="18,0" Width="310" Height="310" ClipToBounds="True">
-            <!-- 사각형 전체 작전 지도 위에 이동하는 원형 레이더 탐지범위를 오버레이 -->
-            <Rectangle Width="310" Height="310" Fill="#071A14" Stroke="#1A4A3A" StrokeThickness="1"/>
-            <Path Data="M18,40 L292,40 M18,95 L292,95 M18,150 L292,150 M18,205 L292,205 M18,260 L292,260 M55,18 L55,292 M110,18 L110,292 M165,18 L165,292 M220,18 L220,292 M275,18 L275,292" Stroke="#123B2D" StrokeThickness="0.6" StrokeDashArray="2 5"/>
-            <!-- 레이더 링과 제주도 작전 지도 -->
-            <Ellipse Width="275" Height="275" Stroke="#1A4A3A" StrokeThickness="1.2" Canvas.Left="17" Canvas.Top="17"/>
-            <Ellipse Width="205" Height="205" Stroke="#123126" StrokeDashArray="3 4" Canvas.Left="52" Canvas.Top="52"/>
-            <Ellipse Width="135" Height="135" Stroke="#123126" StrokeDashArray="3 4" Canvas.Left="87" Canvas.Top="87"/>
-            <Line X1="154" Y1="17" X2="154" Y2="292" Stroke="#133A2C"/>
-            <Line X1="17" Y1="154" X2="292" Y2="154" Stroke="#133A2C"/>
-            <Line X1="58" Y1="58" X2="250" Y2="250" Stroke="#112A21"/>
-            <Line X1="250" Y1="58" X2="58" Y2="250" Stroke="#112A21"/>
-            <!-- 0°는 상단 중앙. 모터는 −135°~+135°를 왕복하고 스캔 빔은 100° 폭으로 펼쳐진다. -->
-                        <Path x:Name="DetectionSweep" Panel.ZIndex="4" Data="M154,154 L51,68 A134,134 0 0 1 257,68 Z" Fill="#00E98B" Opacity="0.12">
-              <Path.RenderTransform>
-                <TransformGroup><RotateTransform x:Name="SweepTransform" CenterX="154" CenterY="154" Angle="-60"/><TranslateTransform x:Name="SweepRangeTransform"/></TransformGroup>
-              </Path.RenderTransform>
-            </Path>
-            <Path Data="M73,166 C83,145 108,135 126,131 C145,119 174,116 198,124 C219,124 240,135 246,151 C254,163 251,178 239,185 C226,197 205,198 190,205 C166,216 145,207 130,211 C112,211 98,199 87,190 C74,184 68,175 73,166 Z" Fill="#0B2920" Stroke="#28745A" StrokeThickness="1.4" Opacity="0.62">
-              <Path.RenderTransform>
-                <ScaleTransform CenterX="154" CenterY="165" ScaleX="1.6" ScaleY="1.6"/>
-              </Path.RenderTransform>
-            </Path>
-            <Path Data="M89,166 C119,151 140,164 161,148 C180,134 207,142 237,156 M100,190 C128,180 148,192 171,181 C192,171 211,178 234,173 M130,138 L143,205 M182,126 L192,201" Stroke="#195340" StrokeThickness="0.8" Fill="Transparent">
-              <Path.RenderTransform>
-                <ScaleTransform CenterX="154" CenterY="165" ScaleX="1.6" ScaleY="1.6"/>
-              </Path.RenderTransform>
-            </Path>
-            <TextBlock Text="JEJU ISLAND" Foreground="#3A8A69" FontSize="8" FontWeight="Bold" Canvas.Left="123" Canvas.Top="157" Opacity="0.8"/>
-            <!-- 중앙 감지자산 -->
-            <!-- 감지자산 회전 가능 범위: 원호 없이 작은 ^ 형태의 점선 -->
-            <Line X1="154" Y1="154" X2="112" Y2="192" Stroke="#00C878" StrokeThickness="1" StrokeDashArray="3 3"/>
-            <Line X1="154" Y1="154" X2="196" Y2="192" Stroke="#00C878" StrokeThickness="1" StrokeDashArray="3 3"/>
-            <Canvas x:Name="DetectionAsset" Width="48" Height="48" Canvas.Left="132" Canvas.Top="133"><Canvas.RenderTransform><RotateTransform x:Name="DetectionAssetTransform" CenterX="21" CenterY="21"/></Canvas.RenderTransform><Ellipse Width="43" Height="43" Stroke="#00E98B" StrokeThickness="1" StrokeDashArray="2 2"/><Ellipse Width="15" Height="15" Fill="#063B28" Stroke="#00F19A" StrokeThickness="2" Canvas.Left="14" Canvas.Top="14"/><Line X1="21" Y1="21" X2="21" Y2="3" Stroke="#00E98B" StrokeThickness="2"/><Ellipse Width="5" Height="5" Fill="#C8FFE4" Canvas.Left="19" Canvas.Top="19"/></Canvas>
-            <!-- 하단 타격자산: 방위각은 회전, 고각은 위치와 포신 고도로 반영 -->
-            <Canvas x:Name="StrikeAsset" Width="42" Height="42" Canvas.Left="133" Canvas.Top="196">
-              <Canvas.RenderTransform>
-                <RotateTransform x:Name="StrikeAzimuthTransform" CenterX="21" CenterY="21" Angle="47"/>
-              </Canvas.RenderTransform>
-              <Line x:Name="StrikeBarrel" X1="21" Y1="21" X2="21" Y2="2" Stroke="#FFB000" StrokeThickness="3" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-              <Path Data="M12,25 L21,13 L30,25 Z" Fill="#C75A00" Stroke="#FFE0A3" StrokeThickness="1"/>
-              <Ellipse Width="10" Height="10" Fill="#FF8500" Stroke="#FFEAC0" StrokeThickness="1" Canvas.Left="16" Canvas.Top="19"/>
-            </Canvas>
-            <TextBlock x:Name="StrikeAssetLabel" Text="&#xD0C0;&#xACA9;&#xC790;&#xC0B0;  AZ 047&#xB0; / EL 22&#xB0;" Foreground="#FFB000" FontSize="8" FontWeight="Bold" Canvas.Left="95" Canvas.Top="246"/>
-            <!-- 타격자산의 최대 회전 범위: 중앙 0°, −135° ~ +135° -->
-            <Path Data="M154,217 L84,287 A100,100 0 1 1 224,287 Z" Stroke="#B97915" StrokeThickness="1" StrokeDashArray="3 3" Fill="#FFB000" Opacity="0.07"/>
-            <Line X1="154" Y1="217" X2="84" Y2="287" Stroke="#B97915" StrokeThickness="1" StrokeDashArray="3 3"/>
-            <Line X1="154" Y1="217" X2="224" Y2="287" Stroke="#B97915" StrokeThickness="1" StrokeDashArray="3 3"/>
-            <TextBlock Text="−135°" Foreground="#B97915" FontSize="8" Canvas.Left="68" Canvas.Top="287"/><TextBlock Text="+135°" Foreground="#B97915" FontSize="8" Canvas.Left="218" Canvas.Top="287"/>
-            <Line x:Name="SimulationBeam" X1="154" Y1="210" X2="195" Y2="75" Stroke="#FF315D" StrokeThickness="2" Opacity="0"/>
-            <Ellipse x:Name="Target001Dot" Width="13" Height="13" Fill="#FF7900" Stroke="#FFE4A8" StrokeThickness="2" Canvas.Left="189" Canvas.Top="69"/>
-            <TextBlock x:Name="Target001Label" Text="TGT-001" Foreground="#FF9700" FontSize="8" Canvas.Left="204" Canvas.Top="64"/>
-            <Ellipse x:Name="Target002Dot" Width="9" Height="9" Fill="#FF9D00"/><TextBlock x:Name="Target002Label" Text="TGT-002" Foreground="#FFB000" FontSize="8"/>
-            <Ellipse x:Name="Target003Dot" Width="9" Height="9" Fill="#FA0345"/><TextBlock x:Name="Target003Label" Text="TGT-003" Foreground="#FF1750" FontSize="8"/>
-            <Ellipse x:Name="Target403Dot" Width="8" Height="8" Fill="#FF7900"/><TextBlock x:Name="Target403Label" Text="TGT-403" Foreground="#FF9700" FontSize="8"/>
-            <TextBlock Text="0°" Foreground="#4C9D75" Canvas.Left="147" Canvas.Top="8"/>
-            <TextBlock Text="−135°" Foreground="#4C9D75" FontSize="9" Canvas.Left="58" Canvas.Top="289"/>
-            <TextBlock Text="+135°" Foreground="#4C9D75" FontSize="9" Canvas.Left="222" Canvas.Top="289"/>
-            <TextBlock Text="270° PING-PONG · BEAM 100°" Foreground="#3A8A69" FontSize="8" Canvas.Left="86" Canvas.Top="7"/>
-          </Canvas>
-          <UniformGrid Grid.Row="2" Columns="2" Margin="12,0">
-            <Border Style="{StaticResource C}">
-              <StackPanel>
-                <TextBlock Style="{StaticResource L}" Text="&#xD0D0;&#xC9C0; &#xBC94;&#xC704;"/>
-                <TextBlock Style="{StaticResource V}" Text="4.0 Km"/>
-              </StackPanel>
-            </Border>
-            <Border Style="{StaticResource C}">
-              <StackPanel>
-                <TextBlock Style="{StaticResource L}" Text="&#xC2A4;&#xCE94; &#xC18D;&#xB3C4;"/>
-                <TextBlock Style="{StaticResource V}" Text="15 rps"/>
-              </StackPanel>
-            </Border>
-            <Border Style="{StaticResource C}">
-              <StackPanel>
-                <TextBlock Style="{StaticResource L}" Text="&#xD574;&#xC0C1;&#xB3C4;"/>
-                <TextBlock Style="{StaticResource V}" Text="0.1&#xB0;"/>
-              </StackPanel>
-            </Border>
-            <Border Style="{StaticResource C}">
-              <StackPanel>
-                <TextBlock Style="{StaticResource L}" Text="&#xD3EC;&#xC778;&#xD2B8;/&#xCD08;"/>
-                <TextBlock Style="{StaticResource V}" Text="300k"/>
-              </StackPanel>
-            </Border>
-          </UniformGrid>
-          <StackPanel Grid.Row="3" Margin="16,17">
-            <TextBlock Text="&#xC704;&#xD611; &#xB4F1;&#xAE09;" Foreground="#407D64" Margin="0,0,0,8"/>
-            <TextBlock Text="&#x25A0;  CRIT  &#xC989;&#xAC01; &#xC870;&#xCE58;" Foreground="#FA1350"/>
-            <TextBlock Text="&#x25A0;  HIGH  &#xC6B0;&#xC120; &#xCD94;&#xC801;" Foreground="#FF7800"/>
-            <TextBlock Text="&#x25A0;  MED   &#xAC10;&#xC2DC; &#xC720;&#xC9C0;" Foreground="#FFB000"/>
-            <TextBlock Text="&#x25A0;  LOW   &#xC704;&#xD5D8; &#xB0AE;&#xC74C;" Foreground="#00DD8B"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-      <Grid Grid.Column="1">
-        <Grid.RowDefinitions>
-          <RowDefinition Height="40"/>
-          <RowDefinition Height="2*" MinHeight="150"/>
-          <RowDefinition Height="6"/>
-          <RowDefinition Height="168"/>
-          <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
-        <DockPanel Grid.Row="0" LastChildFill="False">
-          <TextBlock Style="{StaticResource S}" Text="&#x2503; &#xD45C;&#xC801; &#xBAA9;&#xB85D;" DockPanel.Dock="Left"/>
-          <TextBlock Text="&#xC704;&#xD611; 3" Foreground="#FFB000" FontWeight="Bold" Margin="0,12,18,0" DockPanel.Dock="Right"/>
-        </DockPanel>
-        <StackPanel Grid.Row="1">
-          <Grid Margin="12,0">
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="110"/>
-              <ColumnDefinition Width="95"/>
-              <ColumnDefinition Width="75"/>
-              <ColumnDefinition Width="90"/>
-              <ColumnDefinition Width="85"/>
-              <ColumnDefinition Width="80"/>
-              <ColumnDefinition Width="80"/>
-              <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="&#xD45C;&#xC801; ID" Foreground="#407D64"/>
-            <TextBlock Grid.Column="1" Text="&#xBC29;&#xC704;&#xAC01;" Foreground="#407D64"/>
-            <TextBlock Grid.Column="2" Text="&#xACE0;&#xAC01;" Foreground="#407D64"/>
-            <TextBlock Grid.Column="3" Text="&#xAC70;&#xB9AC;(m)" Foreground="#407D64"/>
-            <TextBlock Grid.Column="4" Text="&#xC18D;&#xB3C4;(m/s)" Foreground="#407D64"/>
-            <TextBlock Grid.Column="5" Text="&#xC704;&#xD611;" Foreground="#407D64"/>
-            <TextBlock Grid.Column="6" Text="RCS" Foreground="#407D64"/>
-            <TextBlock Grid.Column="7" Text="&#xC0C1;&#xD0DC;" Foreground="#407D64"/>
-          </Grid>
-          <Button Style="{StaticResource R}" Click="TargetClick" Tag="TGT-001">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="110"/>
-                <ColumnDefinition Width="95"/>
-                <ColumnDefinition Width="75"/>
-                <ColumnDefinition Width="90"/>
-                <ColumnDefinition Width="85"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="TGT-001" Foreground="#00F19A" FontWeight="Bold"/>
-              <TextBlock Grid.Column="1" Text="39&#xB0;"/>
-              <TextBlock Grid.Column="2" Text="15&#xB0;"/>
-              <TextBlock Grid.Column="3" Text="1908"/>
-              <TextBlock Grid.Column="4" Text="127"/>
-              <TextBlock Grid.Column="5" Text="HIGH" Foreground="#FF7A00"/>
-              <TextBlock Grid.Column="6" Text="0.84"/>
-              <TextBlock x:Name="Target001Status" Grid.Column="7" Text="TRACKING" Foreground="#00E98B"/>
-            </Grid>
-          </Button>
-          <Button Style="{StaticResource R}" Click="TargetClick" Tag="TGT-002">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="110"/>
-                <ColumnDefinition Width="95"/>
-                <ColumnDefinition Width="75"/>
-                <ColumnDefinition Width="90"/>
-                <ColumnDefinition Width="85"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="TGT-002"/>
-              <TextBlock Grid.Column="1" Text="119&#xB0;"/>
-              <TextBlock Grid.Column="2" Text="5&#xB0;"/>
-              <TextBlock Grid.Column="3" Text="2943"/>
-              <TextBlock Grid.Column="4" Text="67"/>
-              <TextBlock Grid.Column="5" Text="MED" Foreground="#FFB000"/>
-              <TextBlock Grid.Column="6" Text="1.22"/>
-              <TextBlock x:Name="Target002Status" Grid.Column="7" Text="DETECTED" Foreground="#4B9473"/>
-            </Grid>
-          </Button>
-          <Button Style="{StaticResource R}" Click="TargetClick" Tag="TGT-003">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="110"/>
-                <ColumnDefinition Width="95"/>
-                <ColumnDefinition Width="75"/>
-                <ColumnDefinition Width="90"/>
-                <ColumnDefinition Width="85"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="TGT-003"/>
-              <TextBlock Grid.Column="1" Text="−49&#xB0;"/>
-              <TextBlock Grid.Column="2" Text="32&#xB0;"/>
-              <TextBlock Grid.Column="3" Text="987"/>
-              <TextBlock Grid.Column="4" Text="187" Foreground="#FFB000"/>
-              <TextBlock Grid.Column="5" Text="CRIT" Foreground="#FF174E"/>
-              <TextBlock Grid.Column="6" Text="0.41"/>
-              <TextBlock x:Name="Target003Status" Grid.Column="7" Text="DETECTED" Foreground="#4B9473"/>
-            </Grid>
-          </Button>
-          <Button Style="{StaticResource R}" Click="TargetClick" Tag="TGT-403">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="110"/>
-                <ColumnDefinition Width="95"/>
-                <ColumnDefinition Width="75"/>
-                <ColumnDefinition Width="90"/>
-                <ColumnDefinition Width="85"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="80"/>
-                <ColumnDefinition Width="*"/>
-              </Grid.ColumnDefinitions>
-              <TextBlock Text="TGT-403"/>
-              <TextBlock Grid.Column="1" Text="47&#xB0;"/>
-              <TextBlock Grid.Column="2" Text="6&#xB0;"/>
-              <TextBlock Grid.Column="3" Text="2856"/>
-              <TextBlock Grid.Column="4" Text="51"/>
-              <TextBlock Grid.Column="5" Text="HIGH" Foreground="#FF7A00"/>
-              <TextBlock Grid.Column="6" Text="0.43"/>
-              <TextBlock x:Name="Target403Status" Grid.Column="7" Text="DETECTED" Foreground="#4B9473"/>
-            </Grid>
-          </Button>
-        </StackPanel>
-        <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#1B4336" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" ShowsPreview="True" Cursor="SizeNS" ToolTip="드래그하여 표적 목록 높이 조절"/>
-        <Border Grid.Row="3" BorderBrush="#193A2E" BorderThickness="0,1">
-          <StackPanel Margin="16,12">
-            <StackPanel Orientation="Horizontal">
-              <TextBlock x:Name="SelectedTarget" Text="TGT-001" Foreground="#FF7800" FontWeight="Bold" FontSize="15"/>
-              <TextBlock x:Name="SelectedThreat" Text="   HIGH   TRACKING" Foreground="#7BD9AB"/>
-            </StackPanel>
-            <UniformGrid Columns="5" Margin="0,10,0,6">
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xBC29;&#xC704;&#xAC01;"/>
-                  <TextBlock x:Name="AzimuthValue" Style="{StaticResource V}" Text="39&#xB0;"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xACE0;&#xAC01;"/>
-                  <TextBlock x:Name="ElevationValue" Style="{StaticResource V}" Text="15&#xB0;"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xAC70;&#xB9AC;"/>
-                  <TextBlock x:Name="DistanceValue" Style="{StaticResource V}" Text="1908m"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xC18D;&#xB3C4;"/>
-                  <TextBlock x:Name="SpeedValue" Style="{StaticResource V}" Text="127 m/s"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="RCS"/>
-                  <TextBlock x:Name="RcsValue" Style="{StaticResource V}" Text="0.84 m&#xB2;"/>
-                </StackPanel>
-              </Border>
-            </UniformGrid>
-            <Button x:Name="AssignButton" Content="&#xD45C;&#xC801; &#xD560;&#xB2F9; &#x2192;" Click="AssignClick" Width="116" Height="31" HorizontalAlignment="Left" Background="#064E32" BorderBrush="#00ED91" Foreground="#00F19A" FontWeight="Bold"/>
-          </StackPanel>
-        </Border>
-        <Grid Grid.Row="4" Margin="12,10"><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><DockPanel><TextBlock Style="{StaticResource S}" Margin="0" Text="┃ 이벤트 로그" DockPanel.Dock="Left"/><Button Content="로그 열기" Click="OpenLogClick" DockPanel.Dock="Right" Padding="5,1" FontSize="10" Background="#08251B" Foreground="#00E98B" BorderBrush="#1B4336"/></DockPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#C7E9D6" FontSize="11"/></Grid>
+  <Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="*"/><RowDefinition Height="28"/></Grid.RowDefinitions>
+    <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1"><DockPanel VerticalAlignment="Center">
+      <TextBlock Text="⬡  A A D C - 9   대공방어 통제 시스템" Foreground="{StaticResource Green}" FontSize="16" FontWeight="Bold" Width="326"/>
+      <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center"><TextBlock x:Name="ClockText" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/></StackPanel>
+    </DockPanel></Border>
+    <ScrollViewer x:Name="WorkspaceScrollViewer" Grid.Row="1" Margin="0,8" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" PreviewMouseWheel="Workspace_PreviewMouseWheel" SizeChanged="WorkspaceScrollViewer_SizeChanged"><Grid x:Name="WorkspaceLayout" MinHeight="560"><Grid.LayoutTransform><ScaleTransform x:Name="WorkspaceScaleTransform" ScaleX="1" ScaleY="1"/></Grid.LayoutTransform><Grid.ColumnDefinitions><ColumnDefinition Width="290" MinWidth="220"/><ColumnDefinition Width="6"/><ColumnDefinition Width="*" MinWidth="360"/><ColumnDefinition Width="6"/><ColumnDefinition Width="300" MinWidth="230"/></Grid.ColumnDefinitions>
+      <Border Grid.Column="0" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1" Margin="0,0,6,0"><Grid Margin="12"><Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="Auto"/><RowDefinition Height="320"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+        <DockPanel LastChildFill="False"><TextBlock Text="탐지 레이더" Foreground="{StaticResource Green}" FontWeight="Bold" Height="18" VerticalAlignment="Center"/><ComboBox x:Name="RdrSelector" Width="88" Height="18" MinWidth="80" FontSize="11" Padding="3,0" VerticalContentAlignment="Center" VerticalAlignment="Center" HorizontalAlignment="Right" DockPanel.Dock="Right" DisplayMemberPath="DisplayName" SelectionChanged="RdrSelectionChanged"/></DockPanel>
+        <TextBlock Grid.Row="1" x:Name="RdrStatusLine" Text="RDR 자산 프레임 대기" Foreground="{StaticResource Muted}" Margin="0,0,0,6"/>
+        <Canvas x:Name="RadarCanvas" Grid.Row="2" Width="260" Height="300" HorizontalAlignment="Center" Background="#07110F" ClipToBounds="True">
+          <Ellipse Width="250" Height="250" Stroke="#1B5842" Canvas.Left="5" Canvas.Top="20"/><Ellipse Width="166" Height="166" Stroke="#16412F" StrokeDashArray="3 4" Canvas.Left="47" Canvas.Top="62"/><Ellipse Width="82" Height="82" Stroke="#16412F" StrokeDashArray="3 4" Canvas.Left="89" Canvas.Top="104"/>
+          <Line X1="130" Y1="20" X2="130" Y2="270" Stroke="#184331"/><Line X1="5" Y1="145" X2="255" Y2="145" Stroke="#184331"/><Line X1="41" Y1="56" X2="219" Y2="234" Stroke="#123126"/><Line X1="219" Y1="56" X2="41" Y2="234" Stroke="#123126"/>
+          <TextBlock Text="−135°" Foreground="#52796D" FontSize="9" Canvas.Left="0" Canvas.Top="272"/><TextBlock Text="0°" Foreground="#52796D" FontSize="9" Canvas.Left="124" Canvas.Top="4"/><TextBlock Text="+135° / 270°" Foreground="#52796D" FontSize="9" Canvas.Left="194" Canvas.Top="272"/>
+          <Line x:Name="RadarSweep" X1="130" Y1="145" X2="130" Y2="22" Stroke="#00E68A" StrokeThickness="2"/>
+          <Ellipse Width="8" Height="8" Fill="#00E68A" Canvas.Left="126" Canvas.Top="141"/>
+        </Canvas>
+        <UniformGrid Grid.Row="4" Columns="2" Rows="3"><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="RDR ID" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RdrIdText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="사용 가능" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RdrEnabledText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="구동" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RdrOperatingText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="연결" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RdrConnectedText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="방위각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RdrAzText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="고각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="RdrElText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border></UniformGrid>
+      </Grid></Border>
+      <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+      <Grid Grid.Column="2" Margin="0,0,0,0"><Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="*"/><RowDefinition Height="150"/><RowDefinition Height="135"/></Grid.RowDefinitions>
+        <DockPanel><TextBlock Text="표적 목록" Foreground="{StaticResource Green}" FontWeight="Bold" Width="65" Height="12" Margin="5,0,0,0"/><TextBlock x:Name="TargetCountText" Text="0 / 10" Foreground="{StaticResource Muted}" DockPanel.Dock="Right" VerticalAlignment="Center"/></DockPanel>
+        <DataGrid x:Name="TargetGrid" Grid.Row="1" ItemsSource="{Binding Targets}" SelectionChanged="TargetGridSelectionChanged" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F" BorderBrush="{StaticResource Line}" Foreground="#C3D6CE" RowBackground="#07100F" AlternatingRowBackground="#091411" SelectionMode="Single" IsReadOnly="False">
+          <DataGrid.Columns>
+            <DataGridTextColumn Header="표적 ID" Binding="{Binding DisplayName}" IsReadOnly="True" Width="1.2*" MinWidth="105"/><DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" IsReadOnly="True" Width="0.9*" MinWidth="68"/><DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" IsReadOnly="True" Width="0.75*" MinWidth="55"/><DataGridTextColumn Header="거리(m)" Binding="{Binding DistanceText}" IsReadOnly="True" Width="0.9*" MinWidth="68"/>
+            <DataGridTextColumn Header="X" Binding="{Binding LidarXText}" IsReadOnly="True" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="Y" Binding="{Binding LidarYText}" IsReadOnly="True" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="Z" Binding="{Binding LidarZText}" IsReadOnly="True" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="RDR ID" Binding="{Binding RdrId}" IsReadOnly="True" Width="0.8*" MinWidth="58"/><DataGridTextColumn Header="상태" Binding="{Binding StatusText}" IsReadOnly="True" Width="0.9*" MinWidth="65"/>
+            <DataGridTemplateColumn Header="타격자산" Width="1.15*" MinWidth="95"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.FcsAssets, RelativeSource={RelativeSource AncestorType=DataGrid}}" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectedValue="{Binding SelectedFcsId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+            <DataGridTemplateColumn Header="할당" Width="1.1*" MinWidth="90"><DataGridTemplateColumn.CellTemplate><DataTemplate><Button Click="TargetAssignClick" Padding="5,3"><Button.Style><Style TargetType="Button"><Setter Property="Content" Value="표적 할당"/><Setter Property="Background" Value="#08251B"/><Setter Property="Foreground" Value="#00E68A"/><Style.Triggers><DataTrigger Binding="{Binding IsAssigned}" Value="True"><Setter Property="Content" Value="할당 완료"/><Setter Property="Background" Value="#805000"/><Setter Property="Foreground" Value="#FFE0A3"/><Setter Property="BorderBrush" Value="#FFB000"/></DataTrigger></Style.Triggers></Style></Button.Style></Button></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
+          </DataGrid.Columns>
+        </DataGrid>
+        <Border Grid.Row="2" Margin="0,6,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Panel}"><Grid><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><TextBlock Text="표적 할당 정보" Foreground="{StaticResource Green}" Margin="10,5"/><DataGrid x:Name="AssignmentGrid" Grid.Row="1" ItemsSource="{Binding Assignments}" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F" BorderBrush="{StaticResource Line}" Foreground="#C3D6CE" RowBackground="#07100F" AlternatingRowBackground="#091411" IsReadOnly="True" FontSize="10"><DataGrid.Columns><DataGridTextColumn Header="표적 ID" Binding="{Binding TargetName}" Width="1.1*" MinWidth="85"/><DataGridTextColumn Header="타격자산" Binding="{Binding FcsName}" Width="0.9*" MinWidth="70"/><DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" Width="0.8*" MinWidth="62"/><DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" Width="0.7*" MinWidth="52"/><DataGridTextColumn Header="거리(m)" Binding="{Binding DistanceText}" Width="0.9*" MinWidth="70"/><DataGridTextColumn Header="X" Binding="{Binding LidarXText}" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="Y" Binding="{Binding LidarYText}" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="Z" Binding="{Binding LidarZText}" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="RDR ID" Binding="{Binding RdrIdText}" Width="0.8*" MinWidth="58"/><DataGridTextColumn Header="표적 상태" Binding="{Binding TargetStatusText}" Width="1.0*" MinWidth="78"/><DataGridTextColumn Header="할당 상태" Binding="{Binding StateText}" Width="1.5*" MinWidth="110"/><DataGridTemplateColumn Header="발사" Width="0.75*" MinWidth="58"><DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="발사" Click="FireAssignmentClick" Background="#681326" Foreground="White" BorderBrush="#FF3152" Padding="4,2"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn><DataGridTemplateColumn Header="취소" Width="0.75*" MinWidth="58"><DataGridTemplateColumn.CellTemplate><DataTemplate><Button Content="취소" Click="CancelAssignmentClick" Padding="4,2"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn></DataGrid.Columns></DataGrid><TextBlock x:Name="AssignmentEmptyText" Grid.Row="1" Text="할당된 표적이 없습니다" Foreground="{StaticResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/></Grid></Border>
+        <Border Grid.Row="3" Margin="0,6,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Panel}"><Grid><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><StackPanel Orientation="Horizontal" Margin="10,3" VerticalAlignment="Center"><TextBlock Text="이벤트 로그" Foreground="{StaticResource Green}" VerticalAlignment="Center"/><Button Content="로그파일 열기" Click="OpenEventLogClick" Margin="8,0,0,0" Width="82" Height="19" Padding="3,0" FontSize="9"/></StackPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#8BB0A1" FontSize="11"/></Grid></Border>
       </Grid>
-      <Border Grid.Column="2" BorderBrush="#193A2E" BorderThickness="1,0,0,0">
-        <Grid>
-          <Grid.RowDefinitions>
-            <RowDefinition Height="40"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <TextBlock Style="{StaticResource S}" Text="&#x2503; &#xBC1C;&#xC0AC;&#xB300; &#xC81C;&#xC5B4;"/>
-          <StackPanel Grid.Row="1" Margin="14,5">
-            <Border Padding="12,8" Height="54">
-              <DockPanel>
-                <TextBlock Text="&#xD560;&#xB2F9; &#xD45C;&#xC801;" Foreground="#407D64"/>
-                <TextBlock x:Name="AssignmentStatus" Text="&#x2014; &#xC5C6;&#xC74C; &#x2014;" Foreground="#699E86" DockPanel.Dock="Right"/>
-              </DockPanel>
-            </Border>
-            <Grid Height="132" Margin="0,10,0,4">
-              <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-              <StackPanel>
-                <TextBlock Text="방위각  (−135° ~ +135° / 270°)" Foreground="#407D64" FontSize="10"/>
-                <Canvas x:Name="AzGauge" Width="128" Height="84" HorizontalAlignment="Center"/>
-                <TextBlock x:Name="AzGaugeValue" Text="+47.00°" Foreground="#00E98B" FontWeight="Bold" HorizontalAlignment="Center"/>
-              </StackPanel>
-              <StackPanel Grid.Column="1">
-                <TextBlock Text="고각  (0–90°)" Foreground="#407D64" FontSize="10"/>
-                <Canvas x:Name="ElGauge" Width="128" Height="84" HorizontalAlignment="Center"/>
-                <TextBlock x:Name="ElGaugeValue" Text="22.00°" Foreground="#FFB000" FontWeight="Bold" HorizontalAlignment="Center"/>
-              </StackPanel>
-            </Grid>
-            <Button x:Name="ManualControlButton" Content="수동 자세 조정 ▾" Click="ToggleManualControl" Height="28" Background="#08251B" Foreground="#00E98B" BorderBrush="#1B4336" Margin="0,2,0,4"/>
-            <StackPanel x:Name="ManualControlPanel" Visibility="Collapsed">
-              <DockPanel><TextBlock Text="AZ 방위각  ·  0° 기준" Foreground="#407D64" DockPanel.Dock="Left"/><TextBlock x:Name="AzValue" Text="+47.00°" Foreground="#00E98B" DockPanel.Dock="Right"/></DockPanel>
-              <Slider x:Name="AzSlider" Minimum="0" Maximum="270" Value="182" SmallChange="0.01" ValueChanged="AngleChanged" Foreground="#00E98B" Margin="0,0,0,8"/>
-              <DockPanel><TextBlock Text="EL 고각" Foreground="#407D64" DockPanel.Dock="Left"/><TextBlock x:Name="ElValue" Text="22.00°" Foreground="#FFB000" DockPanel.Dock="Right"/></DockPanel>
-              <Slider x:Name="ElSlider" Minimum="0" Maximum="90" Value="22" SmallChange="0.01" ValueChanged="AngleChanged" Foreground="#FFB000" Margin="0,0,0,8"/>
-              <DockPanel><TextBlock Text="감지자산 모터 방위각" Foreground="#407D64" DockPanel.Dock="Left"/><TextBlock x:Name="DetectionMoveValue" Text="0°" Foreground="#00E98B" DockPanel.Dock="Right"/></DockPanel>
-              <Slider x:Name="DetectionMoveSlider" Minimum="0" Maximum="270" Value="135" ValueChanged="DetectionMoveChanged" Foreground="#00E98B" Margin="0,0,0,8"/>
-            </StackPanel>
-            <TextBlock Text="&#xB808;&#xC774;&#xC800; &#xC2DC;&#xC2A4;&#xD15C;" Foreground="#407D64" Margin="0,0,0,4"/>
-            <UniformGrid Columns="2">
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xCD9C;&#xB825;"/>
-                  <TextBlock Style="{StaticResource V}" Text="15 kW"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xD30C;&#xC7A5;"/>
-                  <TextBlock Style="{StaticResource V}" Text="1064 nm"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xB0C9;&#xAC01;"/>
-                  <TextBlock Style="{StaticResource V}" Text="28.4&#xB0;C"/>
-                </StackPanel>
-              </Border>
-              <Border Style="{StaticResource C}">
-                <StackPanel>
-                  <TextBlock Style="{StaticResource L}" Text="&#xCDA9;&#xC804;"/>
-                  <TextBlock Style="{StaticResource V}" Text="100%"/>
-                </StackPanel>
-              </Border>
-            </UniformGrid>
-            <Border Padding="12" Margin="0,8,0,14">
-              <StackPanel>
-                <TextBlock Style="{StaticResource L}" Text="&#xD604;&#xC7AC; &#xC704;&#xCE58;"/>
-                <TextBlock>
-                  <Run Text="AZ " Foreground="#4E9876"/>
-                  <Run x:Name="AzText" Text="047&#xB0;" FontSize="20" FontWeight="Bold" Foreground="#00E98B"/>
-                  <Run Text="   EL " Foreground="#4E9876"/>
-                  <Run x:Name="ElText" Text="22&#xB0;" FontSize="20" FontWeight="Bold" Foreground="#FFB000"/>
-                </TextBlock>
-              </StackPanel>
-            </Border>
-            <StackPanel>
-              <TextBlock Text="&#xBC1C;&#xC0AC; &#xD1B5;&#xC81C;" Foreground="#407D64"/>
-              <TextBlock x:Name="Checks" Text="&#x25A0; &#xD45C;&#xC801; &#xD560;&#xB2F9;                         NG&#10;&#x25A0; &#xBC1C;&#xC0AC;&#xB300; &#xC870;&#xC900;                       NG&#10;&#x25A0; &#xB808;&#xC774;&#xC800; &#xC900;&#xBE44;                       OK" Foreground="#8CC9A9"/>
-            </StackPanel>
-            <Button x:Name="FireButton" Content="&#x25CF;   &#xBC1C;&#xC0AC; &#xBA85;&#xB839;" Click="FireClick" Height="48" Margin="0,12,0,0" Background="#C90028" Foreground="White" BorderBrush="#FF3152" FontSize="17" FontWeight="Bold"/>
-          </StackPanel>
-        </Grid>
-      </Border>
-    </Grid>
-    <Border Grid.Row="2" BorderBrush="#193A2E" BorderThickness="0,1,0,0">
-            <DockPanel Margin="16,0">
-                <TextBlock Text="시스템 정상 운용" Foreground="#4E9876" VerticalAlignment="Center" Margin="20,0"/>
-            </DockPanel>
-    </Border>
+      <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+      <Border Grid.Column="4" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"><StackPanel Margin="14"><TextBlock Text="타격 자산" Foreground="{StaticResource Green}" FontSize="15" FontWeight="Bold"/><ComboBox x:Name="FcsSelector" Margin="0,12,0,10" DisplayMemberPath="DisplayName" SelectionChanged="FcsSelectionChanged"/><UniformGrid Columns="2" Rows="4" Margin="0,8"><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="FCS ID" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsIdText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="사용 가능" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsEnabledText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="구동" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsOperatingText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="연결" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsConnectedText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="레이저" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsLaserText" Text="—" Foreground="#FFB000" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="방위각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsAzText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="고각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsElText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border></UniformGrid><TextBlock Text="발사 명령은 공유 메모리 명령 송신기 연동 후 활성화됩니다." Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="3,12"/></StackPanel></Border>
+    </Grid></ScrollViewer>
+    <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0"><DockPanel LastChildFill="False"><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="● " Foreground="#FFB000"/><TextBlock x:Name="SharedMemoryStatus" Text="공유 메모리 수신기 시작 중" Foreground="#FFB000"/></StackPanel><StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center"><Button Content="−" Click="ZoomOutClick" Width="18" Height="17" Padding="0" FontSize="9"/><Button x:Name="ZoomResetButton" Content="100%" Click="ZoomResetClick" Width="38" Height="17" Padding="1,0" Margin="2,0" FontSize="9"/><Button Content="+" Click="ZoomInClick" Width="18" Height="17" Padding="0" FontSize="9"/></StackPanel></DockPanel></Border>
   </Grid>
 </Window>

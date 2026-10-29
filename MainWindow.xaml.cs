@@ -1,8 +1,11 @@
-using System;
-using System.Diagnostics;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -11,249 +14,620 @@ namespace AadcCommandCenter;
 
 public partial class MainWindow : Window
 {
-    private bool _isAssigned;
+    private readonly DashboardData _data = new();
+    private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _scan = new() { Interval = TimeSpan.FromMilliseconds(35) };
+    private readonly Dictionary<uint, uint> _targetFcsSelections = new();
+    private readonly HashSet<uint> _assignedTargets = new();
+    private readonly Dictionary<uint, AssignmentView> _assignmentsByTarget = new();
+    private SharedMemoryFrameReader? _frameReader;
     private double _scanAngle = -135;
-    private double _scanDirection = 1;
-    private double _targetPhase;
-    private double? _aimAzimuth;
-    private double? _aimElevation;
-    private int _interceptTicks;
-    private Ellipse? _activeTargetDot;
-    private TextBlock? _activeTargetLabel;
-    private readonly string _logPath = System.IO.Path.Combine(AppContext.BaseDirectory, "AADC-9-simulation.log");
-    private readonly DispatcherTimer _scanTimer = new() { Interval = TimeSpan.FromMilliseconds(35) };
+    private int _scanDirection = 1;
+    private bool _isSharedMemoryLive;
+    private bool? _previousConnectionState;
+    private uint? _selectedTargetId;
+    private double _workspaceZoom = 1.0;
+    private bool _workspaceLayoutRefreshQueued;
+    private readonly string _eventLogPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AadcCommandCenter", "event-log.txt");
 
     public MainWindow()
     {
         InitializeComponent();
-        Loaded += (_, _) =>
+        DataContext = _data;
+        RdrSelector.ItemsSource = _data.RdrAssets;
+        FcsSelector.ItemsSource = _data.FcsAssets;
+        TargetGrid.ItemsSource = _data.Targets;
+        AssignmentGrid.ItemsSource = _data.Assignments;
+        LoadPersistentEventLog();
+        AddLog($"프로그램 시작 · 로그파일 {_eventLogPath}");
+        _frameReader = new SharedMemoryFrameReader();
+        _frameReader.StateChanged += state => Dispatcher.BeginInvoke(() =>
         {
-            UpdateControlVisuals();
-            AddLog("SYSTEM", "모의 관제 시스템 시작");
-            _scanTimer.Tick += ScanTimerTick;
-            _scanTimer.Start();
-        };
-        Closed += (_, _) => _scanTimer.Stop();
-    }
-
-    private void ScanTimerTick(object? sender, EventArgs e)
-    {
-        ClockText.Text = DateTime.Now.ToString("yyyy-MM-dd  HH:mm:ss");
-        _scanAngle += _scanDirection * 1.2;
-        if (_scanAngle >= 135 || _scanAngle <= -135)
-        {
-            _scanAngle = Math.Clamp(_scanAngle, -135, 135);
-            _scanDirection *= -1;
-        }
-        SweepTransform.Angle = _scanAngle;
-        ScanAzimuthText.Text = $"SCAN {_scanAngle:+0.0;-0.0;0.0}°";
-        DetectionAssetTransform.Angle = _scanAngle;
-        DetectionMoveSlider.Value = _scanAngle + 135;
-        DetectionMoveValue.Text = $"{_scanAngle:+0.0;-0.0;0.0}°";
-        AnimateTargetAndAim();
-    }
-
-    private void AnimateTargetAndAim()
-    {
-        _targetPhase += 0.035;
-        PlaceTarget(Target001Dot, Target001Label, 39, 1908, Math.Sin(_targetPhase) * 5, Math.Cos(_targetPhase * 1.4) * 35);
-        PlaceTarget(Target002Dot, Target002Label, 119, 2943, 0, 0);
-        PlaceTarget(Target003Dot, Target003Label, -49, 987, 0, 0);
-        PlaceTarget(Target403Dot, Target403Label, 47, 2856, 0, 0);
-        if (_aimAzimuth is double az && _aimElevation is double el)
-        {
-            AzSlider.Value += (az - AzSlider.Value) * 0.045;
-            ElSlider.Value += (el - ElSlider.Value) * 0.045;
-            if (Math.Abs(az - AzSlider.Value) < 0.05 && Math.Abs(el - ElSlider.Value) < 0.05)
+            var isLive = state.StartsWith("LIVE", StringComparison.Ordinal);
+            if (_previousConnectionState != isLive)
             {
-                AzSlider.Value = az; ElSlider.Value = el; _aimAzimuth = _aimElevation = null;
-                Checks.Text = "■ 표적 할당                         OK\n■ 발사대 조준                       OK\n■ 레이저 준비                       OK";
-                AssignButton.Content = "할당 완료 ✓";
-                AddLog("READY", "표적 자동 조준 완료");
+                if (isLive)
+                    AddLog(_previousConnectionState == false ? "공유 메모리 연결 시작 · 재연결" : "공유 메모리 연결 시작");
+                else if (_previousConnectionState == true)
+                    AddLog($"공유 메모리 연결 중단 · {state}");
+                _previousConnectionState = isLive;
             }
-        }
-        if (_interceptTicks > 0 && --_interceptTicks == 0)
+            _isSharedMemoryLive = isLive;
+            SharedMemoryStatus.Text = state;
+            SharedMemoryStatus.Foreground = isLive
+                ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
+                : new SolidColorBrush(Color.FromRgb(255, 176, 0));
+            if (isLive) _scan.Start(); else _scan.Stop();
+            RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
+            RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
+        });
+        _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
+        Loaded += (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); QueueWorkspaceLayoutRefresh(); };
+        Closed += (_, _) => { _clock.Stop(); _scan.Stop(); _frameReader.Stop(); _frameReader.Dispose(); };
+        _clock.Tick += (_, _) => UpdateClock();
+        _scan.Tick += (_, _) =>
         {
-            SimulationBeam.Opacity = 0;
-            if (_activeTargetDot is not null) _activeTargetDot.Visibility = Visibility.Collapsed;
-            if (_activeTargetLabel is not null) { _activeTargetLabel.Text += "  SIM KILL"; _activeTargetLabel.Foreground = new SolidColorBrush(Color.FromRgb(0, 233, 139)); }
-            var status = SelectedTarget.Text switch
+            _scanAngle += _scanDirection * 1.2;
+            if (_scanAngle >= 135 || _scanAngle <= -135) { _scanAngle = Math.Clamp(_scanAngle, -135, 135); _scanDirection *= -1; }
+            var radians = _scanAngle * Math.PI / 180;
+            RadarSweep.X2 = 130 + 120 * Math.Sin(radians);
+            RadarSweep.Y2 = 145 - 120 * Math.Cos(radians);
+        };
+    }
+
+    private void ApplyFrame(SharedFrame frame)
+    {
+        var payload = frame.payload;
+        // The sender's selectedFcsId is a global asset selection, not a per-target
+        // assignment. Preserve the operator's choice by target ID across frames,
+        // including targets that temporarily disappear from the incoming frame.
+        foreach (var existingTarget in _data.Targets)
+            _targetFcsSelections[existingTarget.Id] = existingTarget.SelectedFcsId;
+
+        var rdrs = payload.rdrAssets.Take((int)payload.rdrCount)
+            .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg)).ToArray();
+        var fcs = payload.fcsAssets.Take((int)payload.fcsCount)
+            .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg)).ToArray();
+        var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1)
+            .Select(x => new TargetRecord(x.targetId, x.azimuthDeg, x.elevationDeg, x.distanceM, x.lidarX, x.lidarY, x.lidarZ, x.rdrId, x.status, x.valid == 1,
+                _targetFcsSelections.TryGetValue(x.targetId, out var selectedFcsId) ? selectedFcsId : payload.selectedFcsId,
+                _assignedTargets.Contains(x.targetId))).ToArray();
+
+        SyncById(_data.RdrAssets, rdrs, x => x.Id, (current, next) => current.UpdateFrom(next));
+        SyncById(_data.FcsAssets, fcs, x => x.Id, (current, next) => current.UpdateFrom(next));
+        SyncById(_data.Targets, targets, x => x.Id, (current, next) => current.UpdateFrom(next));
+        RdrSelector.SelectedItem = _data.RdrAssets.FirstOrDefault(x => x.Id == payload.selectedRdrId) ?? _data.RdrAssets.FirstOrDefault();
+        FcsSelector.SelectedItem = _data.FcsAssets.FirstOrDefault(x => x.Id == payload.selectedFcsId) ?? _data.FcsAssets.FirstOrDefault();
+        RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
+        RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
+        RefreshAssignments();
+        TargetCountText.Text = $"{_data.Targets.Count} / {SharedMemoryProtocol.TargetCapacity}";
+        DrawRadar();
+        QueueWorkspaceLayoutRefresh();
+    }
+
+    private static void SyncById<T>(ObservableCollection<T> current, IReadOnlyCollection<T> incoming, Func<T, uint> getId, Action<T, T> update)
+    {
+        var ids = incoming.Select(getId).ToHashSet();
+        for (var i = current.Count - 1; i >= 0; i--)
+            if (!ids.Contains(getId(current[i]))) current.RemoveAt(i);
+
+        foreach (var next in incoming)
+        {
+            var existing = current.FirstOrDefault(item => getId(item) == getId(next));
+            if (existing is null) current.Add(next);
+            else update(existing, next);
+        }
+    }
+
+    private void UpdateClock() => ClockText.Text = DateTime.Now.ToString("yyyy-MM-dd  HH:mm:ss");
+
+    private void ZoomInClick(object sender, RoutedEventArgs e) => SetWorkspaceZoom(_workspaceZoom + 0.1);
+    private void ZoomOutClick(object sender, RoutedEventArgs e) => SetWorkspaceZoom(_workspaceZoom - 0.1);
+    private void ZoomResetClick(object sender, RoutedEventArgs e) => SetWorkspaceZoom(1.0);
+
+    private void SetWorkspaceZoom(double zoom)
+    {
+        _workspaceZoom = Math.Clamp(Math.Round(zoom, 2), 0.5, 1.5);
+        WorkspaceScaleTransform.ScaleX = _workspaceZoom;
+        WorkspaceScaleTransform.ScaleY = _workspaceZoom;
+        ZoomResetButton.Content = $"{_workspaceZoom:P0}";
+        FitWorkspaceWidth();
+        QueueWorkspaceLayoutRefresh();
+        AddLog($"작업 영역 배율 변경 · {_workspaceZoom:P0}");
+    }
+
+    private void WorkspaceScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        FitWorkspaceWidth();
+        QueueWorkspaceLayoutRefresh();
+    }
+
+    private void FitWorkspaceWidth()
+    {
+        if (WorkspaceScrollViewer.ViewportWidth <= 0) return;
+        const double minimumWorkspaceWidth = 962; // left + center minimum + right panels and splitters
+        var width = Math.Max(minimumWorkspaceWidth, WorkspaceScrollViewer.ViewportWidth / _workspaceZoom);
+        if (double.IsNaN(WorkspaceLayout.Width) || Math.Abs(WorkspaceLayout.Width - width) > 1)
+            WorkspaceLayout.Width = width;
+    }
+
+    private void QueueWorkspaceLayoutRefresh()
+    {
+        if (_workspaceLayoutRefreshQueued) return;
+        _workspaceLayoutRefreshQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+        {
+            _workspaceLayoutRefreshQueued = false;
+            FitWorkspaceWidth();
+            WorkspaceLayout.InvalidateMeasure();
+            TargetGrid.InvalidateMeasure();
+            AssignmentGrid.InvalidateMeasure();
+            WorkspaceLayout.UpdateLayout();
+            RecalculateStarColumns(TargetGrid);
+            RecalculateStarColumns(AssignmentGrid);
+        }));
+    }
+
+    private static void RecalculateStarColumns(DataGrid grid)
+    {
+        foreach (var column in grid.Columns.Where(column => column.Width.IsStar))
+        {
+            var starWidth = column.Width;
+            column.Width = DataGridLength.Auto;
+            column.Width = starWidth;
+        }
+        grid.UpdateLayout();
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+        switch (e.Key)
+        {
+            case Key.OemPlus:
+            case Key.Add:
+                SetWorkspaceZoom(_workspaceZoom + 0.1);
+                e.Handled = true;
+                break;
+            case Key.OemMinus:
+            case Key.Subtract:
+                SetWorkspaceZoom(_workspaceZoom - 0.1);
+                e.Handled = true;
+                break;
+            case Key.D0:
+            case Key.NumPad0:
+                SetWorkspaceZoom(1.0);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void Workspace_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
+        SetWorkspaceZoom(_workspaceZoom + (e.Delta > 0 ? 0.05 : -0.05));
+        e.Handled = true;
+    }
+
+    private void RdrSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
+    }
+
+    private void RefreshRdrInfo(RdrAsset? rdr)
+    {
+        if (RdrIdText is null) return;
+        if (!_isSharedMemoryLive || rdr is null)
+        {
+            RdrIdText.Text = rdr?.DisplayName ?? "NULL";
+            RdrEnabledText.Text = RdrOperatingText.Text = RdrConnectedText.Text = RdrAzText.Text = RdrElText.Text = "NULL";
+            SetRdrValueForeground(Brushes.Orange);
+            RdrStatusLine.Text = "공유 메모리 대기 · NULL";
+            RdrStatusLine.Foreground = Brushes.Orange;
+            return;
+        }
+        RdrIdText.Text = rdr.DisplayName;
+        RdrEnabledText.Text = YesNo(rdr.IsEnabled); RdrOperatingText.Text = YesNo(rdr.IsOperating); RdrConnectedText.Text = YesNo(rdr.IsConnected);
+        RdrAzText.Text = $"{rdr.AzimuthDeg:0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0}°";
+        SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
+        RdrStatusLine.Text = $"{rdr.DisplayName} · {(rdr.IsConnected ? "CONNECTED" : "DISCONNECTED")} · {(rdr.IsOperating ? "OPERATING" : "STOPPED")}";
+        RdrStatusLine.Foreground = rdr.IsConnected && rdr.IsOperating ? new SolidColorBrush(Color.FromRgb(0, 230, 138)) : Brushes.Orange;
+        DrawRadar();
+    }
+
+    private void SetRdrValueForeground(Brush brush)
+    {
+        RdrIdText.Foreground = RdrEnabledText.Foreground = RdrOperatingText.Foreground = RdrConnectedText.Foreground = RdrAzText.Foreground = RdrElText.Foreground = brush;
+    }
+
+    private void FcsSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
+    }
+
+    private void RefreshFcsInfo(FcsAsset? fcs)
+    {
+        if (FcsIdText is null) return;
+        if (!_isSharedMemoryLive || fcs is null)
+        {
+            FcsIdText.Text = fcs?.DisplayName ?? "NULL";
+            FcsEnabledText.Text = FcsOperatingText.Text = FcsConnectedText.Text = FcsLaserText.Text = FcsAzText.Text = FcsElText.Text = "NULL";
+            SetFcsValueForeground(Brushes.Orange);
+            return;
+        }
+        FcsIdText.Text = fcs.DisplayName;
+        FcsEnabledText.Text = YesNo(fcs.IsEnabled); FcsOperatingText.Text = YesNo(fcs.IsOperating); FcsConnectedText.Text = YesNo(fcs.IsConnected);
+        FcsLaserText.Text = fcs.LaserOn ? "ON" : "OFF";
+        FcsAzText.Text = $"{fcs.AzimuthDeg:0}°"; FcsElText.Text = $"{fcs.ElevationDeg:0}°";
+        SetFcsValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
+    }
+
+    private void SetFcsValueForeground(Brush brush)
+    {
+        FcsIdText.Foreground = FcsEnabledText.Foreground = FcsOperatingText.Foreground = FcsConnectedText.Foreground = FcsLaserText.Foreground = FcsAzText.Foreground = FcsElText.Foreground = brush;
+    }
+
+    private static string YesNo(bool value) => value ? "YES" : "NO";
+
+    private void DrawRadar()
+    {
+        if (RadarCanvas is null) return;
+        foreach (var dot in RadarCanvas.Children.OfType<Ellipse>().Where(x => x.Tag is uint).ToArray()) RadarCanvas.Children.Remove(dot);
+        var rdr = RdrSelector.SelectedItem as RdrAsset;
+        if (rdr is null) return;
+        foreach (var target in _data.Targets.Where(x => x.Valid != 0 && x.RdrId == rdr.Id))
+        {
+            var signedAz = target.AzimuthDeg - 135d;
+            var angle = signedAz * Math.PI / 180;
+            var radius = Math.Clamp(target.DistanceM / 4000d * 118d, 8, 118);
+            var x = 130 + radius * Math.Sin(angle); var y = 145 - radius * Math.Cos(angle);
+            var isSelected = _selectedTargetId == target.Id;
+            var dot = new Ellipse
             {
-                "TGT-002" => Target002Status,
-                "TGT-003" => Target003Status,
-                "TGT-403" => Target403Status,
-                _ => Target001Status
+                Width = isSelected ? 12 : 8,
+                Height = isSelected ? 12 : 8,
+                Fill = isSelected ? new SolidColorBrush(Color.FromRgb(0, 162, 255)) : target.Status == 1 ? Brushes.Gray : target.Status == 2 ? Brushes.Orange : new SolidColorBrush(Color.FromRgb(0, 230, 138)),
+                Stroke = isSelected ? Brushes.LightCyan : Brushes.Transparent,
+                StrokeThickness = isSelected ? 1.5 : 0,
+                Cursor = Cursors.Hand,
+                Tag = target.Id,
+                ToolTip = target.DisplayName
             };
-            status.Text = "SIM KILL";
-            status.Foreground = new SolidColorBrush(Color.FromRgb(0, 233, 139));
-            AddLog("SIM", $"{SelectedTarget.Text} 모의 격추 완료");
-            _isAssigned = false; AssignmentStatus.Text = "— 다음 표적 대기 —"; AssignButton.Content = "표적 할당 →"; AssignButton.IsEnabled = true;
-            Checks.Text = "■ 표적 할당                         READY\n■ 발사대 조준                       READY\n■ 레이저 준비                       OK";
-            FireButton.Content = "●   발사 명령";
-            _activeTargetDot = null; _activeTargetLabel = null;
+            dot.MouseLeftButtonDown += RadarTargetMouseLeftButtonDown;
+            Canvas.SetLeft(dot, x - dot.Width / 2); Canvas.SetTop(dot, y - dot.Height / 2); RadarCanvas.Children.Add(dot);
         }
     }
 
-    // 표의 상대 방위각(0°=상단)과 거리(최대 4 km)를 레이더 좌표로 변환한다.
-    private static void PlaceTarget(Ellipse dot, TextBlock label, double azimuth, double range, double azJitter, double rangeJitter)
+    private void RadarTargetMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (dot.Visibility != Visibility.Visible) return;
-        var angle = (azimuth + azJitter) * Math.PI / 180;
-        var radius = Math.Clamp((range + rangeJitter) / 4000d * 118d, 12, 118);
-        var x = 154 + radius * Math.Sin(angle);
-        var y = 154 - radius * Math.Cos(angle);
-        Canvas.SetLeft(dot, x - dot.Width / 2); Canvas.SetTop(dot, y - dot.Height / 2);
-        Canvas.SetLeft(label, x + 8); Canvas.SetTop(label, y - 12);
+        if (sender is not Ellipse { Tag: uint targetId }) return;
+        var target = _data.Targets.FirstOrDefault(x => x.Id == targetId);
+        if (target is null) return;
+        _selectedTargetId = targetId;
+        TargetGrid.SelectedItem = target;
+        TargetGrid.ScrollIntoView(target);
+        DrawRadar();
+        AddLog($"레이더 표적 선택 · {target.DisplayName}");
+        e.Handled = true;
     }
 
-    private (double X, double Y) GetTargetMapPosition(string id)
+    private void TargetGridSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var (azimuth, range) = id switch
+        var selectedId = (TargetGrid.SelectedItem as TargetRecord)?.Id;
+        if (_selectedTargetId == selectedId) return;
+        _selectedTargetId = selectedId;
+        DrawRadar();
+    }
+
+    private void TargetAssignClick(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureSharedMemoryLiveForCommand("표적 할당")) return;
+        if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("표적 할당 거부 · 표적 행을 확인할 수 없음"); return; }
+        AddLog($"표적 할당 버튼 클릭 · {target.DisplayName}");
+        var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == target.SelectedFcsId);
+        if (fcs is null)
         {
-            "TGT-002" => (119d, 2943d),
-            "TGT-003" => (-49d, 987d),
-            "TGT-403" => (47d, 2856d),
-            _ => (39d + Math.Sin(_targetPhase) * 5, 1908d + Math.Cos(_targetPhase * 1.4) * 35)
-        };
-        var angle = azimuth * Math.PI / 180;
-        var radius = Math.Clamp(range / 4000d * 118d, 12, 118);
-        return (154 + radius * Math.Sin(angle), 154 - radius * Math.Cos(angle));
-    }
-
-    private void TargetClick(object sender, RoutedEventArgs e)
-    {
-        var id = (string)((Button)sender).Tag;
-        var data = id switch
+            AddLog($"표적 할당 거부 · {target.DisplayName} 타격자산 미선택");
+            ShowAlert("타격자산을 먼저 선택하세요.", "표적 할당");
+            return;
+        }
+        if (target.Status != 0)
         {
-            "TGT-002" => ("119°", "5°", "2943m", "67 m/s", "1.22 m²", "MED   DETECTED"),
-            "TGT-003" => ("−49°", "32°", "987m", "187 m/s", "0.41 m²", "CRIT   DETECTED"),
-            "TGT-403" => ("47°", "6°", "2856m", "51 m/s", "0.43 m²", "HIGH   DETECTED"),
-            _ => ("39°", "15°", "1908m", "127 m/s", "0.84 m²", "HIGH   TRACKING")
-        };
-        SelectedTarget.Text = id; SelectedThreat.Text = "   " + data.Item6;
-        AzimuthValue.Text = data.Item1; ElevationValue.Text = data.Item2; DistanceValue.Text = data.Item3; SpeedValue.Text = data.Item4; RcsValue.Text = data.Item5;
-        _isAssigned = false; AssignmentStatus.Text = "— 없음 —"; AssignButton.Content = "표적 할당 →"; AssignButton.IsEnabled = true;
-        Checks.Text = "■ 표적 할당                         NG\n■ 발사대 조준                       NG\n■ 레이저 준비                       OK";
-    }
-
-    private void AssignClick(object sender, RoutedEventArgs e)
-    {
-        _isAssigned = true; AssignmentStatus.Text = SelectedTarget.Text; AssignButton.Content = "표적 할당 중…"; AssignButton.IsEnabled = false;
-        // 감지 레이더의 표적 방위각이 아니라, 지도 하단 타격자산에서 표적까지의 실제 방향으로 조준한다.
-        var targetPosition = GetTargetMapPosition(SelectedTarget.Text);
-        var weaponHeading = Math.Atan2(targetPosition.X - 154, -(targetPosition.Y - 217)) * 180 / Math.PI;
-        _aimAzimuth = Math.Clamp(weaponHeading, -135, 135) + 135;
-        _aimElevation = SelectedTarget.Text == "TGT-003" ? 32 : SelectedTarget.Text == "TGT-002" ? 5 : SelectedTarget.Text == "TGT-403" ? 6 : 15;
-        Checks.Text = "■ 표적 할당                         OK\n■ 발사대 조준                       ALIGNING\n■ 레이저 준비                       OK";
-        AddLog("ASSIGN", $"{SelectedTarget.Text} 할당, 자동 조준 시작");
-    }
-
-    private void AngleChanged(object sender, RoutedPropertyChangedEventArgs<double> e) => UpdateControlVisuals();
-
-    private void UpdateControlVisuals()
-    {
-        if (AzText == null) return;
-        var azimuth = AzSlider.Value - 135;
-        var elevation = ElSlider.Value;
-        var azimuthText = $"{azimuth:+0.00;-0.00;0.00}°";
-        AzText.Text = azimuthText;
-        ElText.Text = $"{elevation:0.00}°";
-        AzValue.Text = AzGaugeValue.Text = azimuthText;
-        ElValue.Text = ElGaugeValue.Text = $"{elevation:0.00}°";
-
-        // 지도 자산은 방위각으로만 회전한다. 고각은 자세 값으로만 표시한다.
-        StrikeAzimuthTransform.Angle = azimuth;
-        StrikeAssetLabel.Text = $"타격자산  AZ {azimuthText} / EL {elevation:0.00}°";
-        DrawGauge(AzGauge, AzSlider.Value, 270, Color.FromRgb(0, 233, 139), false);
-        DrawGauge(ElGauge, elevation, 90, Color.FromRgb(255, 176, 0), true);
-    }
-
-    private static void DrawGauge(Canvas gauge, double value, double maximum, Color color, bool elevationGauge)
-    {
-        gauge.Children.Clear();
-        var brush = new SolidColorBrush(color);
-        var dim = new SolidColorBrush(Color.FromRgb(30, 73, 59));
-        var centerX = elevationGauge ? 110d : 64d;
-        const double centerY = 70;
-        const double radius = 50;
-        var startAngle = elevationGauge ? 180d : 210d;
-        var sweepAngle = elevationGauge ? 90d : 120d;
-        var angle = startAngle + (value / maximum * sweepAngle);
-        var startRadians = startAngle * Math.PI / 180;
-        var endRadians = (startAngle + sweepAngle) * Math.PI / 180;
-        var start = new Point(centerX + radius * Math.Cos(startRadians), centerY + radius * Math.Sin(startRadians));
-        var end = new Point(centerX + radius * Math.Cos(endRadians), centerY + radius * Math.Sin(endRadians));
-        gauge.Children.Add(CreateArc(start, end, radius, dim, 6));
-        var pointerRadians = angle * Math.PI / 180;
-        var activeEnd = new Point(centerX + radius * Math.Cos(pointerRadians), centerY + radius * Math.Sin(pointerRadians));
-        gauge.Children.Add(CreateArc(start, activeEnd, radius, brush, 4));
-        var endX = centerX + 40 * Math.Cos(pointerRadians);
-        var endY = centerY + 40 * Math.Sin(pointerRadians);
-        gauge.Children.Add(new Line { X1 = centerX, Y1 = centerY, X2 = endX, Y2 = endY, Stroke = brush, StrokeThickness = 2.5, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round });
-        var hub = new Ellipse { Width = 8, Height = 8, Fill = brush };
-        Canvas.SetLeft(hub, centerX - 4); Canvas.SetTop(hub, centerY - 4); gauge.Children.Add(hub);
-        for (var i = 0; i <= (elevationGauge ? 3 : 6); i++)
+            AddLog($"표적 할당 거부 · {target.DisplayName} 상태 {target.StatusText}");
+            ShowAlert("생존 상태인 표적만 할당할 수 있습니다.", "표적 할당");
+            return;
+        }
+        var occupiedAssignment = _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id && x.TargetId != target.Id);
+        if (occupiedAssignment is not null)
         {
-            var tick = (startAngle + i * (sweepAngle / (elevationGauge ? 3 : 6))) * Math.PI / 180;
-            var outerX = centerX + 56 * Math.Cos(tick); var outerY = centerY + 56 * Math.Sin(tick);
-            var innerX = centerX + 49 * Math.Cos(tick); var innerY = centerY + 49 * Math.Sin(tick);
-            gauge.Children.Add(new Line { X1 = innerX, Y1 = innerY, X2 = outerX, Y2 = outerY, Stroke = dim, StrokeThickness = 1 });
+            AddLog($"표적 할당 거부 · {fcs.DisplayName} 이미 {occupiedAssignment.TargetName}에 할당됨");
+            ShowAlert($"{fcs.DisplayName}은(는) 이미 {occupiedAssignment.TargetName}에 할당된 타격자산입니다.\n기존 할당을 취소한 뒤 다시 시도하세요.", "이미 할당된 타격자산");
+            return;
+        }
+        if (_assignmentsByTarget.TryGetValue(target.Id, out var currentAssignment) && currentAssignment.FcsId == fcs.Id)
+        {
+            AddLog($"표적 할당 거부 · {target.DisplayName}에 {fcs.DisplayName} 이미 할당됨");
+            ShowAlert($"{fcs.DisplayName}은(는) 이미 {target.DisplayName}에 할당되어 있습니다.", "중복 할당");
+            return;
+        }
+
+        if (!_assignmentsByTarget.TryGetValue(target.Id, out var assignment))
+        {
+            assignment = new AssignmentView(target.Id, fcs.Id);
+            _assignmentsByTarget[target.Id] = assignment;
+            _data.Assignments.Add(assignment);
+        }
+        else assignment.FcsId = fcs.Id;
+        assignment.LaunchRequested = false;
+        target.IsAssigned = true;
+        _assignedTargets.Add(target.Id);
+        RefreshAssignments();
+        AddLog($"{target.DisplayName} → {fcs.DisplayName} 표적 할당 시작");
+    }
+
+    private void CancelAssignmentClick(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureSharedMemoryLiveForCommand("표적 할당 취소")) return;
+        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("표적 할당 취소 거부 · 할당 행을 확인할 수 없음"); return; }
+        AddLog($"표적 할당 취소 버튼 클릭 · {assignment.TargetName}");
+        _assignmentsByTarget.Remove(assignment.TargetId);
+        _assignedTargets.Remove(assignment.TargetId);
+        var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
+        if (target is not null) target.IsAssigned = false;
+        _data.Assignments.Remove(assignment);
+        RefreshAssignmentEmptyState();
+        AddLog($"{assignment.TargetName} 표적 할당 취소");
+    }
+
+    private void FireAssignmentClick(object sender, RoutedEventArgs e)
+    {
+        if (!EnsureSharedMemoryLiveForCommand("발사")) return;
+        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("발사 거부 · 할당 행을 확인할 수 없음"); return; }
+        AddLog($"발사 버튼 클릭 · {assignment.TargetName}");
+        var targetName = assignment.TargetName;
+        var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
+        var unmetConditions = new List<string>();
+        if (assignment.StateText != "할당 완료") unmetConditions.Add($"현재 할당 상태: {assignment.StateText} (할당 완료 필요)");
+        if (fcs is null) unmetConditions.Add("타격자산 데이터를 확인할 수 없습니다");
+        else if (!fcs.LaserOn) unmetConditions.Add("레이저 ON 상태가 필요합니다");
+        if (unmetConditions.Count > 0)
+        {
+            AddLog($"발사 거부 · {targetName} · {string.Join(", ", unmetConditions)}");
+            ShowAlert(string.Join(Environment.NewLine, unmetConditions), "발사 조건 미충족");
+            return;
+        }
+        if (fcs is null) return;
+        assignment.LaunchRequested = true;
+        RefreshAssignments();
+        AddLog($"발사 명령 요청 · {targetName} → {fcs.DisplayName} (명령 송신 미연결)");
+        ShowAlert("발사 요청을 기록했습니다.\n현재 공유 메모리에는 명령 송신 규격이 없어 실제 장비로 전송되지는 않았습니다.", "발사 요청");
+    }
+
+    private void ShowAlert(string message, string title) =>
+        MessageBox.Show(this, message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+
+    private bool EnsureSharedMemoryLiveForCommand(string action)
+    {
+        if (_isSharedMemoryLive) return true;
+        AddLog($"{action} 버튼 클릭 · 공유 메모리 대기 · 명령 거부");
+        ShowAlert("공유 메모리 대기 상태입니다.\n명령을 수행할 수 없습니다.", "공유 메모리 대기");
+        return false;
+    }
+
+    private void OpenEventLogClick(object sender, RoutedEventArgs e)
+    {
+        AddLog("로그파일 열기 버튼 클릭");
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "notepad.exe",
+                UseShellExecute = false,
+                ArgumentList = { _eventLogPath }
+            });
+            AddLog("로그파일을 메모장으로 열었습니다");
+        }
+        catch (Exception ex)
+        {
+            AddLog($"로그파일 열기 실패 · {ex.Message}");
+            ShowAlert($"로그파일을 열 수 없습니다.\n{ex.Message}", "로그파일 열기 실패");
         }
     }
 
-    private static System.Windows.Shapes.Path CreateArc(Point start, Point end, double radius, Brush brush, double thickness) => new()
+    private void LoadPersistentEventLog()
     {
-        Stroke = brush,
-        StrokeThickness = thickness,
-        StrokeStartLineCap = PenLineCap.Round,
-        StrokeEndLineCap = PenLineCap.Round,
-        Data = new PathGeometry(new[] { new PathFigure(start, new[] { new ArcSegment(end, new Size(radius, radius), 0, false, SweepDirection.Clockwise, true) }, false) })
-    };
-
-    private void FireClick(object sender, RoutedEventArgs e)
-    {
-        if (!_isAssigned) { MessageBox.Show("발사 조건에 NG가 있습니다. 표적 할당 및 조준 완료 후 다시 시도해 주세요.", "발사 통제 경고", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        if (_aimAzimuth is not null) { AddLog("WAIT", "자동 조준 완료 후 모의 발사가 가능합니다."); MessageBox.Show("발사 조건에 NG가 있습니다. 자동 조준이 완료될 때까지 기다려 주세요.", "발사 통제 경고", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        (_activeTargetDot, _activeTargetLabel) = SelectedTarget.Text switch
+        try
         {
-            "TGT-002" => (Target002Dot, Target002Label),
-            "TGT-003" => (Target003Dot, Target003Label),
-            "TGT-403" => (Target403Dot, Target403Label),
-            _ => (Target001Dot, Target001Label)
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_eventLogPath)!);
+            if (!File.Exists(_eventLogPath)) return;
+            foreach (var line in File.ReadLines(_eventLogPath).Reverse()) EventLogList.Items.Add(line);
+        }
+        catch (Exception ex)
+        {
+            ShowAlert($"기존 이벤트 로그를 불러오지 못했습니다.\n{ex.Message}", "로그파일 읽기 실패");
+        }
+    }
+
+    private void RefreshAssignments()
+    {
+        foreach (var assignment in _data.Assignments)
+        {
+            var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
+            var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
+            assignment.Refresh(target, fcs);
+        }
+        RefreshAssignmentEmptyState();
+    }
+
+    private void RefreshAssignmentEmptyState() => AssignmentEmptyText.Visibility = _data.Assignments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    private void AddLog(string text)
+    {
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {text}";
+        EventLogList.Items.Insert(0, line);
+        try
+        {
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_eventLogPath)!);
+            File.AppendAllText(_eventLogPath, line + Environment.NewLine);
+        }
+        catch (Exception ex)
+        {
+            SharedMemoryStatus.Text = $"로그파일 기록 실패 · {ex.Message}";
+            SharedMemoryStatus.Foreground = Brushes.Orange;
+        }
+    }
+}
+
+public sealed class DashboardData
+{
+    public ObservableCollection<RdrAsset> RdrAssets { get; } = new();
+    public ObservableCollection<FcsAsset> FcsAssets { get; } = new();
+    public ObservableCollection<TargetRecord> Targets { get; } = new();
+    public ObservableCollection<AssignmentView> Assignments { get; } = new();
+}
+
+public sealed class AssignmentView : INotifyPropertyChanged
+{
+    private uint _fcsId;
+    private string _azimuthText = "—", _elevationText = "—", _distanceText = "—", _lidarXText = "—", _lidarYText = "—", _lidarZText = "—", _rdrIdText = "—", _targetStatusText = "WAITING", _stateText = "할당 중";
+    private bool _launchRequested;
+    public uint TargetId { get; }
+    public string TargetName => $"TGT-{TargetId}";
+    public uint FcsId { get => _fcsId; set { if (_fcsId == value) return; _fcsId = value; OnPropertyChanged(); OnPropertyChanged(nameof(FcsName)); } }
+    public string FcsName => $"FCS-{FcsId:000}";
+    public string AzimuthText { get => _azimuthText; private set => Set(ref _azimuthText, value); }
+    public string ElevationText { get => _elevationText; private set => Set(ref _elevationText, value); }
+    public string DistanceText { get => _distanceText; private set => Set(ref _distanceText, value); }
+    public string LidarXText { get => _lidarXText; private set => Set(ref _lidarXText, value); }
+    public string LidarYText { get => _lidarYText; private set => Set(ref _lidarYText, value); }
+    public string LidarZText { get => _lidarZText; private set => Set(ref _lidarZText, value); }
+    public string RdrIdText { get => _rdrIdText; private set => Set(ref _rdrIdText, value); }
+    public string TargetStatusText { get => _targetStatusText; private set => Set(ref _targetStatusText, value); }
+    public string StateText { get => _stateText; private set => Set(ref _stateText, value); }
+    public bool LaunchRequested { get => _launchRequested; set { if (_launchRequested == value) return; _launchRequested = value; OnPropertyChanged(); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public AssignmentView(uint targetId, uint fcsId) { TargetId = targetId; _fcsId = fcsId; }
+
+    public void Refresh(TargetRecord? target, FcsAsset? fcs)
+    {
+        if (target is null) { TargetStatusText = "NO DATA"; StateText = "표적 데이터 대기"; return; }
+        AzimuthText = $"{target.AzimuthDeg:0}°";
+        ElevationText = $"{target.ElevationDeg:0}°";
+        DistanceText = $"{target.DistanceM:0.00}";
+        LidarXText = $"{target.LidarX:0.00}";
+        LidarYText = $"{target.LidarY:0.00}";
+        LidarZText = $"{target.LidarZ:0.00}";
+        RdrIdText = target.RdrId.ToString();
+        TargetStatusText = target.Status switch { 0 => "ALIVE", 1 => "DEAD", 2 => "MISSING", _ => "UNKNOWN" };
+        if (target.Status == 1) { StateText = "격추 완료"; return; }
+        if (LaunchRequested) { StateText = "발사 요청 · 송신 미연결"; return; }
+        if (fcs is null) { StateText = "타격자산 데이터 대기"; return; }
+        var ready = fcs.IsEnabled && fcs.IsOperating && fcs.IsConnected;
+        var aligned = Math.Abs(fcs.AzimuthDeg - target.AzimuthDeg) <= 2 && Math.Abs(fcs.ElevationDeg - target.ElevationDeg) <= 2;
+        StateText = ready && aligned ? "할당 완료" : "할당 중";
+    }
+
+    private void Set(ref string field, string value, [CallerMemberName] string? name = null)
+    { if (field == value) return; field = value; OnPropertyChanged(name); }
+    private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+public sealed class RdrAsset : INotifyPropertyChanged
+{
+    public uint Id { get; }
+    private bool _isEnabled, _isOperating, _isConnected;
+    private int _azimuthDeg, _elevationDeg;
+    public bool IsEnabled { get => _isEnabled; private set => Set(ref _isEnabled, value); }
+    public bool IsOperating { get => _isOperating; private set => Set(ref _isOperating, value); }
+    public bool IsConnected { get => _isConnected; private set => Set(ref _isConnected, value); }
+    public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
+    public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public string DisplayName => $"RDR-{Id:000}";
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public RdrAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, int azimuthDeg, int elevationDeg)
+    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, azimuthDeg, elevationDeg); }
+    public void UpdateFrom(RdrAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.AzimuthDeg, other.ElevationDeg);
+    private void UpdateFrom(bool enabled, bool operating, bool connected, int az, int el)
+    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; AzimuthDeg = az; ElevationDeg = el; }
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
+}
+
+public sealed class FcsAsset : INotifyPropertyChanged
+{
+    public uint Id { get; }
+    private bool _isEnabled, _isOperating, _isConnected, _laserOn;
+    private int _azimuthDeg, _elevationDeg;
+    public bool IsEnabled { get => _isEnabled; private set => Set(ref _isEnabled, value); }
+    public bool IsOperating { get => _isOperating; private set => Set(ref _isOperating, value); }
+    public bool IsConnected { get => _isConnected; private set => Set(ref _isConnected, value); }
+    public bool LaserOn { get => _laserOn; private set => Set(ref _laserOn, value); }
+    public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
+    public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public string DisplayName => $"FCS-{Id:000}";
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public FcsAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, bool laserOn, int azimuthDeg, int elevationDeg)
+    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, laserOn, azimuthDeg, elevationDeg); }
+    public void UpdateFrom(FcsAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.LaserOn, other.AzimuthDeg, other.ElevationDeg);
+    private void UpdateFrom(bool enabled, bool operating, bool connected, bool laser, int az, int el)
+    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; LaserOn = laser; AzimuthDeg = az; ElevationDeg = el; }
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
+}
+
+public sealed class TargetRecord : INotifyPropertyChanged
+{
+    private uint _selectedFcsId;
+    public uint Id { get; }
+    private int _azimuthDeg, _elevationDeg;
+    private float _distanceM, _lidarX, _lidarY, _lidarZ;
+    private uint _rdrId;
+    private byte _status, _valid;
+    private bool _isAssigned;
+    public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
+    public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public float DistanceM { get => _distanceM; private set => Set(ref _distanceM, value); }
+    public float LidarX { get => _lidarX; private set => Set(ref _lidarX, value); }
+    public float LidarY { get => _lidarY; private set => Set(ref _lidarY, value); }
+    public float LidarZ { get => _lidarZ; private set => Set(ref _lidarZ, value); }
+    public uint RdrId { get => _rdrId; private set => Set(ref _rdrId, value); }
+    public byte Status { get => _status; private set => Set(ref _status, value); }
+    public byte Valid { get => _valid; private set => Set(ref _valid, value); }
+    public bool IsAssigned { get => _isAssigned; set => Set(ref _isAssigned, value); }
+    public uint SelectedFcsId { get => _selectedFcsId; set { if (_selectedFcsId == value) return; _selectedFcsId = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedFcsId))); } }
+    public string DisplayName => $"TGT-{Id}";
+    public string AzimuthText => $"{AzimuthDeg:0}°";
+    public string ElevationText => $"{ElevationDeg:0}°";
+    public string DistanceText => $"{DistanceM:0.00}";
+    public string LidarXText => LidarX.ToString("0.00");
+    public string LidarYText => LidarY.ToString("0.00");
+    public string LidarZText => LidarZ.ToString("0.00");
+    public string StatusText => Status switch { 0 => "ALIVE", 1 => "DEAD", 2 => "MISSING", _ => "UNKNOWN" };
+    public string ValidText => Valid == 1 ? "YES" : "NO";
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public TargetRecord(uint id, int azimuthDeg, int elevationDeg, float distanceM, float lidarX, float lidarY, float lidarZ, uint rdrId, byte status, bool valid, uint selectedFcsId, bool isAssigned)
+    {
+        Id = id; _selectedFcsId = selectedFcsId; _isAssigned = isAssigned;
+        UpdateFrom(azimuthDeg, elevationDeg, distanceM, lidarX, lidarY, lidarZ, rdrId, status, valid ? (byte)1 : (byte)0);
+    }
+    public void UpdateFrom(TargetRecord other) => UpdateFrom(other.AzimuthDeg, other.ElevationDeg, other.DistanceM, other.LidarX, other.LidarY, other.LidarZ, other.RdrId, other.Status, other.Valid);
+    private void UpdateFrom(int az, int el, float distance, float x, float y, float z, uint rdrId, byte status, byte valid)
+    { AzimuthDeg = az; ElevationDeg = el; DistanceM = distance; LidarX = x; LidarY = y; LidarZ = z; RdrId = rdrId; Status = status; Valid = valid; }
+    private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        var computed = name switch
+        {
+            nameof(AzimuthDeg) => nameof(AzimuthText), nameof(ElevationDeg) => nameof(ElevationText),
+            nameof(DistanceM) => nameof(DistanceText), nameof(LidarX) => nameof(LidarXText),
+            nameof(LidarY) => nameof(LidarYText), nameof(LidarZ) => nameof(LidarZText),
+            nameof(Status) => nameof(StatusText), nameof(Valid) => nameof(ValidText), _ => null
         };
-        if (_activeTargetDot.Visibility != Visibility.Visible) { AddLog("INFO", "이미 모의 격추된 표적입니다. 다른 표적을 선택하세요."); MessageBox.Show("선택한 표적은 이미 격추되었습니다. 다른 표적을 선택해 주세요.", "발사 통제 경고", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-        SimulationBeam.X2 = Canvas.GetLeft(_activeTargetDot) + _activeTargetDot.Width / 2;
-        SimulationBeam.Y2 = Canvas.GetTop(_activeTargetDot) + _activeTargetDot.Height / 2;
-        SimulationBeam.Opacity = 1; _interceptTicks = 50; FireButton.Content = "● 모의 교전 진행…";
-        AddLog("FIRE", $"{SelectedTarget.Text} 모의 발사 명령 전송");
-        MessageBox.Show($"{SelectedTarget.Text}에 대한 모의 발사 명령을 전송했습니다.", "발사 명령", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private void ToggleManualControl(object sender, RoutedEventArgs e)
-    {
-        var show = ManualControlPanel.Visibility != Visibility.Visible;
-        ManualControlPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        ManualControlButton.Content = show ? "수동 자세 조정 ▴" : "수동 자세 조정 ▾";
-    }
-
-    private void DetectionMoveChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (DetectionAssetTransform == null) return;
-        _scanAngle = e.NewValue - 135;
-        DetectionAssetTransform.Angle = _scanAngle;
-        DetectionMoveValue.Text = $"{_scanAngle:+0.0;-0.0;0.0}°";
-    }
-
-    private void AddLog(string level, string message)
-    {
-        var entry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  [{level}]  {message}";
-        EventLogList?.Items.Insert(0, entry);
-        try { File.AppendAllText(_logPath, entry + Environment.NewLine); } catch { }
-    }
-
-    private void OpenLogClick(object sender, RoutedEventArgs e)
-    {
-        if (!File.Exists(_logPath)) File.WriteAllText(_logPath, "AADC-9 simulation log" + Environment.NewLine);
-        Process.Start(new ProcessStartInfo("notepad.exe", $"\"{_logPath}\"") { UseShellExecute = true });
+        if (computed is not null) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(computed));
     }
 }
