@@ -22,10 +22,20 @@ ControlStationMock.exe
 - reset
 - quit
 
+고각 슬라이더
+- WPF의 라이다 고각 슬라이더(0~90도)는 Named Pipe의 SetRdrElevation 명령으로 모의 ECS에 전송
+- 모의 ECS는 요청을 수신한 뒤 다음 SharedMemory 프레임의 RDRAsset.elevationDeg에 반영
+- 고각 설정 요청에는 RDR ID와 targetId 필드의 정수 각도를 사용하며, 파이프 구조체 크기는 바뀌지 않음
+- RDR 고각은 적용 목표로 설정되며, 현재값은 초당 10도씩 이동해 공유 메모리에 송신
+- 표적 할당 후 FCS는 FCS 좌표에서 표적 위치까지의 방위각(초당 20도)과 표적 고각(초당 10도)에 맞춰 이동하고, 두 각도가 목표에 도달하면 할당 완료 응답
+- 공유 메모리는 100ms마다 갱신하며 모의 RDR 방위각은 초당 10도로 0~270도 왕복
+
 공유 메모리
-- 이름: Local\ControlStationMock.SharedMemory.v1
-- 뮤텍스: Local\ControlStationMock.SharedMemory.Mutex.v1
-- 프레임 크기: 464바이트
+- 이름: Local\ControlStationMock.SharedMemory.v2
+- 뮤텍스: Local\ControlStationMock.SharedMemory.Mutex.v2
+- 프레임 크기: 484바이트 (프로토콜 버전 2)
+- RDRAsset: 36바이트 (위치 X/Y 및 전체 시야각 추가, 위치 단위 m)
+- FCSAsset: 36바이트 (위치 X/Y 추가, 위치 단위 m)
 - 표적 1001~1010의 데이터는 시작 시 생성하며 고정
 - sequence, timestampMs, checksum은 프레임마다 갱신
 

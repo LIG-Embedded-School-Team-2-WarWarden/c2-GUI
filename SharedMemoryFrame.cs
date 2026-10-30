@@ -5,71 +5,111 @@ using System.Threading;
 
 namespace AadcCommandCenter;
 
-// Keep these values and the mapping name in sync with the C++ sender.
+// C++ 송신 프로그램과 공유하는 매핑 이름, 버전, 구조체 크기 설정
 public static class SharedMemoryProtocol
 {
-    public const string DefaultName = "Local\\ControlStationMock.SharedMemory.v1";
-    public const string DefaultMutexName = "Local\\ControlStationMock.SharedMemory.Mutex.v1";
+    // 공유 메모리 매핑과 동기화 뮤텍스 이름
+    public const string DefaultName = "Local\\ControlStationMock.SharedMemory.v2";
+    public const string DefaultMutexName = "Local\\ControlStationMock.SharedMemory.Mutex.v2";
+    // 프레임 식별값과 데이터 구조 버전
     public const uint Magic = 0x314D4354;
-    public const uint Version = 1;
+    public const uint Version = 2;
+    // 프레임에 담을 자산 및 표적 최대 개수
     public const int RdrCapacity = 1;
     public const int FcsCapacity = 1;
     public const int TargetCapacity = 10;
+    // 헤더와 페이로드의 크기(바이트)
     public const int HeaderSize = 32;
-    public const int PayloadSize = 432;
+    public const int PayloadSize = 452;
     public const int FrameSize = HeaderSize + PayloadSize;
 }
 
+/// <summary>RDR 자산 상태와 좌표를 담는 공유 구조체</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedRdrAsset
 {
-    public uint rdrId, isEnabled, isOperating, isConnected;
-    public int azimuthDeg, elevationDeg;
+    public uint rdrId;             // RDR 자산 식별 번호
+    public uint isEnabled;         // 사용 가능 여부: 0=불가, 1=가능
+    public uint isOperating;       // 구동 상태: 0=정지, 1=구동 중
+    public uint isConnected;       // 연결 상태: 0=끊김, 1=연결됨
+    public int azimuthDeg;         // 현재 방위각: 0~270도, 화면 기준 -135~+135도
+    public int elevationDeg;       // 현재 고각: 0~90도
+    public float positionX;       // 공통 평면 좌표계에서 RDR의 X 위치(미터)
+    public float positionY;       // 공통 평면 좌표계에서 RDR의 Y 위치(미터)
+    public float fieldOfViewDeg;  // 방위각 중심선을 기준으로 한 전체 시야각(도)
 }
 
+/// <summary>FCS 자산 상태와 좌표를 담는 공유 구조체</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedFcsAsset
 {
-    public uint fcsId, isEnabled, isOperating, isConnected, laserOn;
-    public int azimuthDeg, elevationDeg;
+    public uint fcsId;             // FCS 자산 식별 번호
+    public uint isEnabled;         // 사용 가능 여부: 0=불가, 1=가능
+    public uint isOperating;       // 구동 상태: 0=정지, 1=구동 중
+    public uint isConnected;       // 연결 상태: 0=끊김, 1=연결됨
+    public uint laserOn;           // 레이저 상태: 0=꺼짐, 1=켜짐
+    public int azimuthDeg;         // 현재 방위각: 0~270도, 화면 기준 -135~+135도
+    public int elevationDeg;       // 현재 고각: 0~90도
+    public float positionX;       // 공통 평면 좌표계에서 FCS의 X 위치(미터)
+    public float positionY;       // 공통 평면 좌표계에서 FCS의 Y 위치(미터)
 }
 
+/// <summary>탐지된 표적의 방향, 좌표, 상태를 담는 공유 구조체</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedTarget
 {
-    public uint targetId;
-    public int azimuthDeg, elevationDeg;
-    public float distanceM, lidarX, lidarY, lidarZ;
-    public uint rdrId;
-    public byte status, valid;
-    public ushort reserved;
+    public uint targetId;          // 표적 고유 번호
+    public int azimuthDeg;         // RDR 기준 표적 방위각(도)
+    public int elevationDeg;       // 표적 고각(도)
+    public float distanceM;        // RDR 기준 표적 거리(미터)
+    public float lidarX;           // 공통 평면 좌표계에서 표적의 X 위치(미터)
+    public float lidarY;           // 공통 평면 좌표계에서 표적의 Y 위치(미터)
+    public float lidarZ;           // 라이다 좌표계에서 표적의 Z 위치(미터)
+    public uint rdrId;             // 표적을 감지한 RDR 자산 번호
+    public byte status;            // 상태: 0=생존, 1=격추, 2=미검출
+    public byte valid;             // 슬롯 사용 여부: 0=미사용, 1=유효한 표적
+    public ushort reserved;        // 정렬과 향후 확장을 위한 예약값, 현재 0
 }
 
+/// <summary>RDR·FCS 자산과 표적 목록을 담는 프레임 페이로드</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedPayload
 {
+    // 고정 크기 RDR 자산 배열
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = SharedMemoryProtocol.RdrCapacity)]
     public SharedRdrAsset[] rdrAssets;
+    // 고정 크기 FCS 자산 배열
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = SharedMemoryProtocol.FcsCapacity)]
     public SharedFcsAsset[] fcsAssets;
-    public uint rdrCount, fcsCount, selectedRdrId, selectedFcsId, targetCount;
+    public uint rdrCount;          // 실제 등록된 RDR 수
+    public uint fcsCount;          // 실제 등록된 FCS 수
+    public uint selectedRdrId;     // GUI에서 선택한 RDR ID, 0은 선택 없음
+    public uint selectedFcsId;     // GUI에서 선택한 FCS ID, 0은 선택 없음
+    public uint targetCount;       // 현재 등록된 표적 수
+    // 고정 크기 표적 배열
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = SharedMemoryProtocol.TargetCapacity)]
     public SharedTarget[] targets;
 }
 
+/// <summary>공유 메모리 프레임의 식별·크기·시간·검증 정보를 담는 헤더</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedFrameHeader
 {
-    public uint magic, version, frameSize, sequence;
-    public ulong timestampMs;
-    public uint payloadSize, checksum;
+    public uint magic;             // 프레임 식별값, SharedMemoryProtocol.Magic과 일치해야 함
+    public uint version;           // 구조체 버전, 현재 2
+    public uint frameSize;         // 헤더 포함 전체 프레임 크기(바이트)
+    public uint sequence;          // 새 프레임마다 증가하는 순번
+    public ulong timestampMs;      // Unix epoch 기준 프레임 생성 시각(밀리초)
+    public uint payloadSize;       // 페이로드 크기(바이트)
+    public uint checksum;          // 페이로드 무결성 확인용 FNV-1a 32비트 체크섬
 }
 
+/// <summary>헤더와 페이로드를 결합한 공유 메모리 전체 프레임</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedFrame
 {
-    public SharedFrameHeader header;
-    public SharedPayload payload;
+    public SharedFrameHeader header; // 프레임 메타데이터
+    public SharedPayload payload;    // 자산 상태와 표적 정보
 }
 
 /// <summary>Read-only poller for the C++ named shared-memory frame.</summary>
@@ -106,7 +146,7 @@ public sealed class SharedMemoryFrameReader : IDisposable
 
     private static void ValidateManagedLayout()
     {
-        if (Marshal.SizeOf<SharedRdrAsset>() != 24 || Marshal.SizeOf<SharedFcsAsset>() != 28 ||
+        if (Marshal.SizeOf<SharedRdrAsset>() != 36 || Marshal.SizeOf<SharedFcsAsset>() != 36 ||
             Marshal.SizeOf<SharedTarget>() != 36 || Marshal.SizeOf<SharedPayload>() != SharedMemoryProtocol.PayloadSize ||
             Marshal.SizeOf<SharedFrameHeader>() != SharedMemoryProtocol.HeaderSize || Marshal.SizeOf<SharedFrame>() != SharedMemoryProtocol.FrameSize)
             throw new InvalidOperationException("C# 공유 메모리 구조체 크기가 C++ 프레임과 일치하지 않습니다.");
