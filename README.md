@@ -2,11 +2,13 @@
 
 ## 공유 메모리 프레임 수신
 
-WPF는 C++ `Frame`을 named shared memory에서 읽습니다. `control_mock` 송신 프로그램과 동일하게 매핑 이름 `Local\ControlStationMock.SharedMemory.v1`, 뮤텍스 이름 `Local\ControlStationMock.SharedMemory.Mutex.v1`을 사용합니다. 다른 이름을 쓸 때는 `AADC9_SHARED_MEMORY_NAME`과 `AADC9_SHARED_MEMORY_MUTEX_NAME` 환경 변수를 지정합니다.
+WPF는 C++ `Frame`을 named shared memory에서 읽습니다. `ControlStationMock` 송신 프로그램과 동일하게 매핑 이름 `Local\ControlStationMock.SharedMemory.v2`, 뮤텍스 이름 `Local\ControlStationMock.SharedMemory.Mutex.v2`를 사용합니다. 다른 이름을 쓸 때는 `AADC9_SHARED_MEMORY_NAME`과 `AADC9_SHARED_MEMORY_MUTEX_NAME` 환경 변수를 지정합니다.
 
-수신기는 50ms마다 송신 뮤텍스를 획득한 뒤 464바이트 프레임을 읽고 magic(`0x314D4354`), version(1), 구조체 크기, FNV-1a payload 체크섬, 자산 및 표적 개수를 확인합니다. C# 구조체는 `Pack=4`이며 공유 메모리는 읽기 전용으로 엽니다. 현재 용량은 RDR 1개, FCS 1개, 표적 10개입니다. 용량을 변경할 때는 C++과 C#의 상수 및 구조체 크기를 함께 갱신해야 합니다.
+수신기는 50ms마다 송신 뮤텍스를 획득한 뒤 484바이트 프레임을 읽고 magic(`0x314D4354`), version(2), 구조체 크기, FNV-1a payload 체크섬, 자산 및 표적 개수를 확인합니다. C# 구조체는 `Pack=4`이며 공유 메모리는 읽기 전용으로 엽니다. 현재 용량은 RDR 1개, FCS 1개, 표적 10개입니다. RDR 구조체에는 X/Y 위치와 전체 시야각, FCS 구조체에는 X/Y 위치가 미터 단위 float로 추가되었습니다. 용량이나 필드를 변경할 때는 C++과 C#의 상수 및 구조체 크기를 함께 갱신해야 합니다.
 
-공유 메모리 프레임은 레이더·표적·자산의 텔레메트리 전용입니다. 할당, 할당 취소, 발사 명령은 아래 Named Pipe 프로토콜로 별도 전송합니다.
+공유 메모리 이름은 `Local\ControlStationMock.SharedMemory.v2`, 뮤텍스는 `Local\ControlStationMock.SharedMemory.Mutex.v2`입니다. 레이더 화면은 수신된 RDR 방위각·시야각으로 탐지 영역을 그리고, RDR/FCS의 위치와 표적 라이다 X/Y 좌표를 평면으로 표시합니다. 방위각 값 0~270도는 화면상 -135~+135도에 대응하고, 135도가 가운데입니다. 모의 ECS는 양 끝에서 방향을 바꿔 핑퐁 주사합니다. 타격자산의 방향은 파란 선으로 표시하고, 할당 표적을 향하는 빨간 선은 레이저 ON 상태에서만 표시합니다.
+
+공유 메모리 프레임은 레이더·표적·자산의 텔레메트리 전용입니다. 할당, 할당 취소, 발사 명령과 라이다 고각 설정은 아래 Named Pipe 프로토콜로 별도 전송합니다. 고각 설정은 `SetRdrElevation` 명령으로 보내며, 모의 ECS는 설정값을 다음 SharedMemory 프레임의 `RDRAsset.elevationDeg`에 반영합니다.
 
 ## Named Pipe 명령 통신
 
@@ -17,7 +19,7 @@ WPF는 Named Pipe 클라이언트이고, `EcsMockControlStation`의 C++ 프로�
 - 프로토콜 버전: `2`
 - 요청 구조체: `Pack = 4`, 28바이트
 - 응답 구조체: `Pack = 4`, 40바이트
-- 명령: 상태 조회, 표적 할당, 할당 취소, 발사
+- 명령: 상태 조회, 표적 할당, 할당 취소, 발사, 라이다 고각 설정(`SetRdrElevation`, 0~90도)
 
 명령 서버는 현재 한 개의 WPF 클라이언트 연결을 처리합니다. 동일한 Pipe 이름으로 모의 통제소를 두 개 실행하면 한 인스턴스만 Pipe를 열 수 있습니다. 오류 231은 이미 다른 서버가 해당 Pipe를 사용 중이라는 뜻입니다.
 
@@ -33,7 +35,8 @@ WPF는 Named Pipe 클라이언트이고, `EcsMockControlStation`의 C++ 프로�
 ### 모의 할당 및 발사 흐름
 
 - 표적 할당 요청을 받으면 서버는 먼저 `ADJUSTING`으로 응답합니다.
-- 모의 FCS 조준 시간은 3초입니다. 이후 상태 조회에 `ASSIGNED`로 응답하고 WPF는 `할당 완료`를 표시합니다.
+- 표적 할당 후 모의 FCS는 FCS 좌표에서 표적 위치까지의 방위각과 표적 고각을 목표로 실제 현재값을 단계적으로 이동합니다. 방위각은 초당 20도, 고각은 초당 10도씩 움직이며 두 축 모두 목표값에 도달한 뒤 `ASSIGNED`가 됩니다.
+- 라이다 고각 적용 명령도 목표값만 설정하고, 현재 RDR 고각은 초당 10도씩 SharedMemory 텔레메트리에 반영됩니다.
 - 할당 완료 전 발사 버튼은 `대기`로 표시되고 사용할 수 없습니다. 할당 완료 후 발사 버튼이 활성화됩니다.
 - 발사 요청을 수신하면 모의 서버는 `FireState = 1`로 응답합니다. WPF의 할당 상태는 `발사 완료`가 됩니다.
 - 발사 전 레이저 ON은 요구하지 않습니다. 레이저 상태는 공유 메모리 텔레메트리 값으로 계속 표시됩니다.

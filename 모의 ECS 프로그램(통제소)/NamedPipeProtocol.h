@@ -25,7 +25,8 @@ enum class CommandType : std::uint32_t
     GetStatus = 0,       // 현재 모의 상태 조회
     AssignTarget = 1,    // 표적 할당 요청
     CancelAssignment = 2,// 표적 할당 취소 요청
-    Fire = 3             // 모의 교전 결과 요청
+    Fire = 3,            // 모의 교전 결과 요청
+    SetRdrElevation = 4  // RDR 고각 설정 요청, targetId 필드에 각도(0~90도)
 };
 
 
@@ -72,13 +73,13 @@ enum class AssignmentState : std::uint32_t
 
 struct PipeCommand
 {
-    std::uint32_t magic;        // 프로토콜 식별값: kPipeMagic
-    std::uint32_t version;      // 프로토콜 버전: kPipeVersion
-    std::uint32_t commandType;  // CommandType에 정의된 명령 종류
-    std::uint32_t requestId;    // 요청과 응답을 연결하기 위한 고유 번호
-    std::uint32_t rdrId;        // 명령 대상 RDR 자산 번호
-    std::uint32_t fcsId;        // 명령 대상 FCS 자산 번호
-    std::uint32_t targetId;     // 명령 대상 표적 번호, 해당 없으면 0
+    std::uint32_t magic;        // 프로토콜 식별값, kPipeMagic과 일치해야 함
+    std::uint32_t version;      // 프로토콜 버전, kPipeVersion과 일치해야 함
+    std::uint32_t commandType;  // CommandType에 정의된 요청 종류
+    std::uint32_t requestId;    // 요청과 응답을 짝짓는 순번
+    std::uint32_t rdrId;        // 명령 대상 RDR ID
+    std::uint32_t fcsId;        // 명령 대상 FCS ID
+    std::uint32_t targetId;     // 표적 ID, 표적 없음은 0; SetRdrElevation 요청에서는 고각(0~90도)
 }; // 전체 크기: 28바이트
 
 
@@ -88,17 +89,17 @@ struct PipeCommand
 
 struct PipeResponse
 {
-    std::uint32_t magic;             // 프로토콜 식별값: kPipeMagic
-    std::uint32_t version;           // 프로토콜 버전: kPipeVersion
-    std::uint32_t requestId;         // 원래 요청의 번호
-    std::uint32_t commandType;       // 처리한 명령 종류
-    std::uint32_t resultCode;        // ResultCode에 정의된 처리 결과
+    std::uint32_t magic;             // 프로토콜 식별값, kPipeMagic과 일치해야 함
+    std::uint32_t version;           // 프로토콜 버전, kPipeVersion과 일치해야 함
+    std::uint32_t requestId;         // 응답 대상 요청의 순번
+    std::uint32_t commandType;       // 처리한 CommandType 값
+    std::uint32_t resultCode;        // 처리 결과를 나타내는 ResultCode 값
 
-    std::uint32_t fcsId;             // 응답에 포함된 FCS 자산 번호
-    std::uint32_t assignedTargetId;  // 현재 할당된 표적 번호, 없으면 0
-    std::uint32_t assignmentState;   // AssignmentState에 정의된 할당 상태
-    std::uint32_t fireState;          // 모의 교전 상태: 0=대기, 1=모의 결과 확인
-    std::uint32_t isConnected;        // 연결 상태: 0=끊김, 1=연결됨
+    std::uint32_t fcsId;             // 응답 상태에 해당하는 FCS ID
+    std::uint32_t assignedTargetId;  // 현재 FCS에 할당된 표적 ID, 미할당은 0
+    std::uint32_t assignmentState;   // 현재 할당 단계를 나타내는 AssignmentState 값
+    std::uint32_t fireState;         // 모의 발사 상태: 0=대기, 1=발사 결과 확인
+    std::uint32_t isConnected;       // ECS 연결 상태: 0=끊김, 1=연결됨
 }; // 전체 크기: 40바이트
 
 // 이전에 설정한 구조체 정렬을 복원

@@ -16,16 +16,14 @@ public partial class MainWindow : Window
 {
     private readonly DashboardData _data = new();
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
-    private readonly DispatcherTimer _scan = new() { Interval = TimeSpan.FromMilliseconds(35) };
     private readonly DispatcherTimer _commandStatusTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _rdrElevationSendTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly PipeCommandClient _pipeClient = new();
     private readonly Dictionary<uint, uint> _targetFcsSelections = new();
     private readonly HashSet<uint> _assignedTargets = new();
     private readonly Dictionary<uint, AssignmentView> _assignmentsByTarget = new();
     private readonly HashSet<uint> _pendingFcsAssignments = new();
     private SharedMemoryFrameReader? _frameReader;
-    private double _scanAngle = -135;
-    private int _scanDirection = 1;
     private bool _isSharedMemoryLive;
     private bool _isCommandPipeLive;
     private bool _isRefreshingCommandStatus;
@@ -34,6 +32,10 @@ public partial class MainWindow : Window
     private uint? _selectedTargetId;
     private double _workspaceZoom = 1.0;
     private bool _workspaceLayoutRefreshQueued;
+    private bool _updatingRdrElevationSlider;
+    private bool _updatingRdrElevationInput;
+    private bool _rdrElevationInputDirty;
+    private int? _requestedRdrElevation;
     private readonly string _eventLogPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AadcCommandCenter", "event-log.txt");
 
     public MainWindow()
@@ -59,27 +61,24 @@ public partial class MainWindow : Window
                 _previousConnectionState = isLive;
             }
             _isSharedMemoryLive = isLive;
+            UpdateRdrElevationControl(RdrSelector.SelectedItem as RdrAsset);
             SharedMemoryStatus.Text = state;
             SharedMemoryStatus.Foreground = isLive
                 ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
                 : new SolidColorBrush(Color.FromRgb(255, 176, 0));
-            if (isLive) _scan.Start(); else _scan.Stop();
             RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
             RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
             RefreshAssignments();
         });
         _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
         Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); };
-        Closed += (_, _) => { _clock.Stop(); _scan.Stop(); _commandStatusTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
+        Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
         _clock.Tick += (_, _) => UpdateClock();
         _commandStatusTimer.Tick += async (_, _) => await RefreshCommandStatusAsync();
-        _scan.Tick += (_, _) =>
+        _rdrElevationSendTimer.Tick += async (_, _) =>
         {
-            _scanAngle += _scanDirection * 1.2;
-            if (_scanAngle >= 135 || _scanAngle <= -135) { _scanAngle = Math.Clamp(_scanAngle, -135, 135); _scanDirection *= -1; }
-            var radians = _scanAngle * Math.PI / 180;
-            RadarSweep.X2 = 130 + 120 * Math.Sin(radians);
-            RadarSweep.Y2 = 145 - 120 * Math.Cos(radians);
+            _rdrElevationSendTimer.Stop();
+            await SendRdrElevationCommandAsync();
         };
     }
 
@@ -93,9 +92,9 @@ public partial class MainWindow : Window
             _targetFcsSelections[existingTarget.Id] = existingTarget.SelectedFcsId;
 
         var rdrs = payload.rdrAssets.Take((int)payload.rdrCount)
-            .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg)).ToArray();
+            .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.fieldOfViewDeg)).ToArray();
         var fcs = payload.fcsAssets.Take((int)payload.fcsCount)
-            .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg)).ToArray();
+            .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY)).ToArray();
         var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1)
             .Select(x => new TargetRecord(x.targetId, x.azimuthDeg, x.elevationDeg, x.distanceM, x.lidarX, x.lidarY, x.lidarZ, x.rdrId, x.status, x.valid == 1,
                 _targetFcsSelections.TryGetValue(x.targetId, out var selectedFcsId) ? selectedFcsId : payload.selectedFcsId,
@@ -107,6 +106,7 @@ public partial class MainWindow : Window
         RdrSelector.SelectedItem = _data.RdrAssets.FirstOrDefault(x => x.Id == payload.selectedRdrId) ?? _data.RdrAssets.FirstOrDefault();
         FcsSelector.SelectedItem = _data.FcsAssets.FirstOrDefault(x => x.Id == payload.selectedFcsId) ?? _data.FcsAssets.FirstOrDefault();
         RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
+        SyncRdrElevationFromTelemetry(RdrSelector.SelectedItem as RdrAsset);
         RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
         RefreshAssignments();
         TargetCountText.Text = $"{_data.Targets.Count} / {SharedMemoryProtocol.TargetCapacity}";
@@ -220,7 +220,126 @@ public partial class MainWindow : Window
 
     private void RdrSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
+        _requestedRdrElevation = null;
+        _rdrElevationInputDirty = false;
+        _rdrElevationSendTimer.Stop();
+        var rdr = RdrSelector.SelectedItem as RdrAsset;
+        UpdateRdrElevationControl(rdr);
+        RefreshRdrInfo(rdr);
+        SyncRdrElevationFromTelemetry(rdr);
+    }
+
+    private void RadarCanvasSizeChanged(object sender, SizeChangedEventArgs e) => DrawRadar();
+
+    private void RdrElevationSliderValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_updatingRdrElevationSlider || RdrElevationSliderValue is null) return;
+        var degrees = Math.Clamp((int)Math.Round(e.NewValue), 0, 90);
+        RdrElevationSliderValue.Text = $"{degrees}°";
+        if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset) return;
+        _rdrElevationInputDirty = false;
+        SetRdrElevationInputText(degrees);
+        QueueRdrElevationCommand(degrees);
+    }
+
+    private void RdrElevationInputPreviewTextInput(object sender, TextCompositionEventArgs e) =>
+        e.Handled = !e.Text.All(char.IsDigit);
+
+    private void RdrElevationInputTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_updatingRdrElevationInput)
+            _rdrElevationInputDirty = true;
+    }
+
+    private void RdrElevationInputApplyClick(object sender, RoutedEventArgs e)
+    {
+        AddLog("라이다 고각 입력 적용 버튼 클릭");
+        if (!int.TryParse(RdrElevationInput.Text, out var degrees) || degrees is < 0 or > 90)
+        {
+            AddLog($"라이다 고각 입력 거부 · 입력값 '{RdrElevationInput.Text}' · 허용 범위 0~90°");
+            ShowAlert("고각은 0부터 90 사이의 정수로 입력하세요.", "고각 입력 확인");
+            RdrElevationInput.Text = ((int)Math.Round(RdrElevationSlider.Value)).ToString();
+            return;
+        }
+
+        _rdrElevationInputDirty = false;
+        SetRdrElevationSlider(degrees);
+        QueueRdrElevationCommand(degrees);
+    }
+
+    private void QueueRdrElevationCommand(int degrees)
+    {
+        if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset) return;
+        _requestedRdrElevation = degrees;
+        _rdrElevationSendTimer.Stop();
+        _rdrElevationSendTimer.Start();
+    }
+
+    private void SyncRdrElevationFromTelemetry(RdrAsset? rdr)
+    {
+        if (rdr is null) return;
+        if (_requestedRdrElevation == rdr.ElevationDeg)
+        {
+            _requestedRdrElevation = null;
+        }
+        if (_requestedRdrElevation is int requested)
+        {
+            SetRdrElevationSlider(requested);
+            return;
+        }
+        SetRdrElevationSlider(Math.Clamp(rdr.ElevationDeg, 0, 90));
+    }
+
+    private void SetRdrElevationSlider(int degrees)
+    {
+        if (RdrElevationSlider is null) return;
+        _updatingRdrElevationSlider = true;
+        RdrElevationSlider.Value = Math.Clamp(degrees, 0, 90);
+        var clampedDegrees = Math.Clamp(degrees, 0, 90);
+        RdrElevationSliderValue.Text = $"{clampedDegrees}°";
+        if (!_rdrElevationInputDirty) SetRdrElevationInputText(clampedDegrees);
+        _updatingRdrElevationSlider = false;
+    }
+
+    private void SetRdrElevationInputText(int degrees)
+    {
+        _updatingRdrElevationInput = true;
+        RdrElevationInput.Text = Math.Clamp(degrees, 0, 90).ToString();
+        _updatingRdrElevationInput = false;
+    }
+
+    private void UpdateRdrElevationControl(RdrAsset? rdr)
+    {
+        if (RdrElevationSlider is null) return;
+        var isEnabled = _isSharedMemoryLive && rdr is not null && rdr.IsConnected && rdr.IsOperating;
+        RdrElevationSlider.IsEnabled = RdrElevationInput.IsEnabled = RdrElevationApplyButton.IsEnabled = isEnabled;
+    }
+
+    private async Task SendRdrElevationCommandAsync()
+    {
+        if (_requestedRdrElevation is not int degrees || RdrSelector.SelectedItem is not RdrAsset rdr || !_isSharedMemoryLive)
+            return;
+        try
+        {
+            var response = await _pipeClient.SendAsync(CommandType.SetRdrElevation, (uint)degrees, rdr.Id);
+            if ((ResultCode)response.ResultCode != ResultCode.Success)
+                throw new IOException(CommandResultText((ResultCode)response.ResultCode));
+
+            AddLog($"라이다 고각 설정 요청 · {rdr.DisplayName} {degrees}°");
+            if ((int)Math.Round(RdrElevationSlider.Value) != degrees)
+                _rdrElevationSendTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            if ((int)Math.Round(RdrElevationSlider.Value) == degrees)
+            {
+                _requestedRdrElevation = null;
+                SyncRdrElevationFromTelemetry(rdr);
+            }
+            else
+                _rdrElevationSendTimer.Start();
+            AddLog($"라이다 고각 설정 실패 · {ex.Message}");
+        }
     }
 
     private void RefreshRdrInfo(RdrAsset? rdr)
@@ -228,6 +347,7 @@ public partial class MainWindow : Window
         if (RdrIdText is null) return;
         if (!_isSharedMemoryLive || rdr is null)
         {
+            UpdateRdrElevationControl(rdr);
             RdrIdText.Text = rdr?.DisplayName ?? "NULL";
             RdrEnabledText.Text = RdrOperatingText.Text = RdrConnectedText.Text = RdrAzText.Text = RdrElText.Text = "NULL";
             SetRdrValueForeground(Brushes.Orange);
@@ -238,6 +358,7 @@ public partial class MainWindow : Window
         RdrIdText.Text = rdr.DisplayName;
         RdrEnabledText.Text = YesNo(rdr.IsEnabled); RdrOperatingText.Text = YesNo(rdr.IsOperating); RdrConnectedText.Text = YesNo(rdr.IsConnected);
         RdrAzText.Text = $"{rdr.AzimuthDeg:0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0}°";
+        UpdateRdrElevationControl(rdr);
         SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
         RdrStatusLine.Text = $"{rdr.DisplayName} · {(rdr.IsConnected ? "CONNECTED" : "DISCONNECTED")} · {(rdr.IsOperating ? "OPERATING" : "STOPPED")}";
         RdrStatusLine.Foreground = rdr.IsConnected && rdr.IsOperating ? new SolidColorBrush(Color.FromRgb(0, 230, 138)) : Brushes.Orange;
@@ -268,7 +389,11 @@ public partial class MainWindow : Window
         FcsEnabledText.Text = YesNo(fcs.IsEnabled); FcsOperatingText.Text = YesNo(fcs.IsOperating); FcsConnectedText.Text = YesNo(fcs.IsConnected);
         FcsLaserText.Text = fcs.LaserOn ? "ON" : "OFF";
         FcsAzText.Text = $"{fcs.AzimuthDeg:0}°"; FcsElText.Text = $"{fcs.ElevationDeg:0}°";
-        SetFcsValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
+        var normalColor = new SolidColorBrush(Color.FromRgb(0, 230, 138));
+        SetFcsValueForeground(normalColor);
+        FcsLaserText.Foreground = fcs.LaserOn
+            ? new SolidColorBrush(Color.FromRgb(255, 65, 82))
+            : normalColor;
     }
 
     private void SetFcsValueForeground(Brush brush)
@@ -281,35 +406,152 @@ public partial class MainWindow : Window
     private void DrawRadar()
     {
         if (RadarCanvas is null) return;
-        foreach (var dot in RadarCanvas.Children.OfType<Ellipse>().Where(x => x.Tag is uint).ToArray()) RadarCanvas.Children.Remove(dot);
+        RadarCanvas.Children.Clear();
         var rdr = RdrSelector.SelectedItem as RdrAsset;
         if (rdr is null) return;
-        foreach (var target in _data.Targets.Where(x => x.Valid != 0 && x.RdrId == rdr.Id))
+
+        var fcs = FcsSelector.SelectedItem as FcsAsset;
+        var targets = _data.Targets.Where(x => x.Valid != 0 && x.RdrId == rdr.Id).ToArray();
+        var minX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Min();
+        var maxX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Max();
+        var minY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Min();
+        var maxY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Max();
+        var span = Math.Max(Math.Max(maxX - minX, maxY - minY), 1.0);
+        var padding = (float)Math.Max(span * 0.18, 0.45);
+        minX -= padding; maxX += padding; minY -= padding; maxY += padding;
+        var canvasWidth = RadarCanvas.ActualWidth > 20 ? RadarCanvas.ActualWidth : double.IsFinite(RadarCanvas.Width) ? RadarCanvas.Width : 260;
+        var canvasHeight = RadarCanvas.ActualHeight > 20 ? RadarCanvas.ActualHeight : double.IsFinite(RadarCanvas.Height) ? RadarCanvas.Height : 280;
+        const double inset = 18;
+        var scale = Math.Min((canvasWidth - inset * 2) / (maxX - minX), (canvasHeight - inset * 2) / (maxY - minY));
+        var originX = (canvasWidth - (maxX - minX) * scale) / 2;
+        var originY = (canvasHeight - (maxY - minY) * scale) / 2;
+        Point Map(double x, double y) => new(originX + (x - minX) * scale, canvasHeight - originY - (y - minY) * scale);
+
+        var gridBrush = new SolidColorBrush(Color.FromRgb(22, 55, 46));
+        var gridStep = span > 8 ? 2.0 : span > 3 ? 1.0 : 0.5;
+        for (var x = Math.Ceiling(minX / gridStep) * gridStep; x <= maxX; x += gridStep)
         {
-            var signedAz = target.AzimuthDeg - 135d;
-            var angle = signedAz * Math.PI / 180;
-            var radius = Math.Clamp(target.DistanceM / 4000d * 118d, 8, 118);
-            var x = 130 + radius * Math.Sin(angle); var y = 145 - radius * Math.Cos(angle);
-            var isSelected = _selectedTargetId == target.Id;
-            var dot = new Ellipse
+            var a = Map(x, minY); var b = Map(x, maxY);
+            RadarCanvas.Children.Add(new Line { X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y, Stroke = gridBrush, StrokeThickness = 1 });
+        }
+        for (var y = Math.Ceiling(minY / gridStep) * gridStep; y <= maxY; y += gridStep)
+        {
+            var a = Map(minX, y); var b = Map(maxX, y);
+            RadarCanvas.Children.Add(new Line { X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y, Stroke = gridBrush, StrokeThickness = 1 });
+        }
+
+        // SharedMemory 방위각 0~270도를 화면상의 -135~+135도로 변환
+        var rdrPoint = Map(rdr.PositionX, rdr.PositionY);
+        var rdrDisplayAzimuth = Math.Clamp(rdr.AzimuthDeg, 0, 270) - 135d;
+        var fov = Math.Clamp(float.IsFinite(rdr.FieldOfViewDeg) ? rdr.FieldOfViewDeg : 0, 0, 360);
+        var edgeClearance = Math.Min(Math.Min(rdrPoint.X - inset, canvasWidth - inset - rdrPoint.X),
+            Math.Min(rdrPoint.Y - inset, canvasHeight - inset - rdrPoint.Y));
+        var viewRadius = Math.Max(4, edgeClearance - 8);
+        var rangeRing = new Ellipse
+        {
+            Width = viewRadius * 2,
+            Height = viewRadius * 2,
+            Stroke = new SolidColorBrush(Color.FromRgb(27, 88, 66)),
+            StrokeThickness = 1,
+            StrokeDashArray = new DoubleCollection { 3, 4 },
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(rangeRing, rdrPoint.X - viewRadius);
+        Canvas.SetTop(rangeRing, rdrPoint.Y - viewRadius);
+        RadarCanvas.Children.Add(rangeRing);
+        if (fov > 0)
+        {
+            var sector = new Polygon { Fill = new SolidColorBrush(Color.FromArgb(45, 0, 230, 138)), Stroke = new SolidColorBrush(Color.FromArgb(120, 0, 230, 138)), StrokeThickness = 1 };
+            sector.Points.Add(rdrPoint);
+            var start = rdrDisplayAzimuth - fov / 2d;
+            var steps = Math.Max(12, (int)(fov / 4));
+            for (var i = 0; i <= steps; i++)
             {
-                Width = isSelected ? 12 : 8,
-                Height = isSelected ? 12 : 8,
-                Fill = isSelected ? new SolidColorBrush(Color.FromRgb(0, 162, 255)) : target.Status == 1 ? Brushes.Gray : target.Status == 2 ? Brushes.Orange : new SolidColorBrush(Color.FromRgb(0, 230, 138)),
-                Stroke = isSelected ? Brushes.LightCyan : Brushes.Transparent,
-                StrokeThickness = isSelected ? 1.5 : 0,
+                var angle = (start + fov * i / steps) * Math.PI / 180d;
+                sector.Points.Add(new Point(rdrPoint.X + viewRadius * Math.Sin(angle), rdrPoint.Y - viewRadius * Math.Cos(angle)));
+            }
+            RadarCanvas.Children.Add(sector);
+        }
+
+        var azimuthRad = rdrDisplayAzimuth * Math.PI / 180d;
+        RadarCanvas.Children.Add(new Line { X1 = rdrPoint.X, Y1 = rdrPoint.Y, X2 = rdrPoint.X + viewRadius * Math.Sin(azimuthRad), Y2 = rdrPoint.Y - viewRadius * Math.Cos(azimuthRad), Stroke = new SolidColorBrush(Color.FromRgb(0, 230, 138)), StrokeThickness = 2 });
+
+        var fcsPoint = fcs is null ? (Point?)null : Map(fcs.PositionX, fcs.PositionY);
+        var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id)?.TargetId;
+        var laserTarget = targets.FirstOrDefault(x => x.Id == assignedTargetId);
+        if (fcs?.LaserOn == true && fcsPoint is Point fp && laserTarget is not null)
+        {
+            var tp = Map(laserTarget.LidarX, laserTarget.LidarY);
+            RadarCanvas.Children.Add(new Line { X1 = fp.X, Y1 = fp.Y, X2 = tp.X, Y2 = tp.Y, Stroke = new SolidColorBrush(Color.FromRgb(255, 65, 82)), StrokeThickness = 1.5 });
+        }
+
+        AddMapLabel("Y ↑   ·   거리 m", 5, canvasHeight - 17, Color.FromRgb(82, 121, 109));
+        if (fcs is not null) AddAssetMarker(fcsPoint!.Value, "FCS", Color.FromRgb(30, 125, 157), fcs.PositionX, fcs.PositionY);
+        AddAssetMarker(rdrPoint, "RDR", Color.FromRgb(0, 190, 225), rdr.PositionX, rdr.PositionY);
+
+        AddMapLabel("0°", rdrPoint.X - 8, rdrPoint.Y - viewRadius - 15, Color.FromRgb(82, 121, 109), 8);
+        var leftLimit = -135 * Math.PI / 180d;
+        var rightLimit = 135 * Math.PI / 180d;
+        AddMapLabel("-135°", rdrPoint.X + viewRadius * Math.Sin(leftLimit) - 16, rdrPoint.Y - viewRadius * Math.Cos(leftLimit), Color.FromRgb(82, 121, 109), 8);
+        AddMapLabel("+135°", rdrPoint.X + viewRadius * Math.Sin(rightLimit) - 10, rdrPoint.Y - viewRadius * Math.Cos(rightLimit), Color.FromRgb(82, 121, 109), 8);
+
+        if (fcs is not null && fcsPoint is Point orientationPoint)
+        {
+            var fcsDisplayAzimuth = Math.Clamp(fcs.AzimuthDeg, 0, 270) - 135d;
+            var fcsAngle = fcsDisplayAzimuth * Math.PI / 180d;
+            const double directionLength = 24;
+            RadarCanvas.Children.Add(new Line
+            {
+                X1 = orientationPoint.X,
+                Y1 = orientationPoint.Y,
+                X2 = orientationPoint.X + directionLength * Math.Sin(fcsAngle),
+                Y2 = orientationPoint.Y - directionLength * Math.Cos(fcsAngle),
+                Stroke = new SolidColorBrush(Color.FromRgb(0, 162, 255)),
+                StrokeThickness = 2.5,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                IsHitTestVisible = false,
+                ToolTip = $"FCS 방향 {fcs.AzimuthDeg}°"
+            });
+        }
+
+        foreach (var target in targets)
+        {
+            var point = Map(target.LidarX, target.LidarY);
+            var isSelected = _selectedTargetId == target.Id;
+            var color = isSelected ? Color.FromRgb(0, 162, 255) : target.Status == 1 ? Color.FromRgb(110, 120, 120) : target.Status == 2 ? Color.FromRgb(255, 176, 0) : Color.FromRgb(255, 65, 82);
+            var marker = new Polygon
+            {
+                Fill = new SolidColorBrush(color),
+                Stroke = isSelected ? Brushes.LightCyan : Brushes.White,
+                StrokeThickness = isSelected ? 1.5 : 0.7,
                 Cursor = Cursors.Hand,
                 Tag = target.Id,
                 ToolTip = target.DisplayName
             };
-            dot.MouseLeftButtonDown += RadarTargetMouseLeftButtonDown;
-            Canvas.SetLeft(dot, x - dot.Width / 2); Canvas.SetTop(dot, y - dot.Height / 2); RadarCanvas.Children.Add(dot);
+            marker.Points.Add(new Point(point.X, point.Y - 6)); marker.Points.Add(new Point(point.X - 5, point.Y + 4)); marker.Points.Add(new Point(point.X + 5, point.Y + 4));
+            marker.MouseLeftButtonDown += RadarTargetMouseLeftButtonDown;
+            RadarCanvas.Children.Add(marker);
+            AddMapLabel(target.DisplayName, point.X + 6, point.Y - 5, color, 8);
+        }
+
+        void AddAssetMarker(Point p, string label, Color color, float x, float y)
+        {
+            var marker = new Ellipse { Width = 16, Height = 16, Fill = new SolidColorBrush(color), Stroke = Brushes.White, StrokeThickness = 1, ToolTip = $"{label}  X:{x:0.00}m  Y:{y:0.00}m" };
+            Canvas.SetLeft(marker, p.X - 8); Canvas.SetTop(marker, p.Y - 8); RadarCanvas.Children.Add(marker);
+            AddMapLabel(label, p.X + 9, p.Y + 3, color, 9);
+        }
+
+        void AddMapLabel(string text, double x, double y, Color color, double fontSize = 9)
+        {
+            var label = new TextBlock { Text = text, Foreground = new SolidColorBrush(color), FontSize = fontSize, IsHitTestVisible = false };
+            Canvas.SetLeft(label, Math.Clamp(x, 2, Math.Max(2, canvasWidth - 80))); Canvas.SetTop(label, Math.Clamp(y, 2, Math.Max(2, canvasHeight - 16))); RadarCanvas.Children.Add(label);
         }
     }
 
     private void RadarTargetMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (sender is not Ellipse { Tag: uint targetId }) return;
+        if (sender is not FrameworkElement { Tag: uint targetId }) return;
         var target = _data.Targets.FirstOrDefault(x => x.Id == targetId);
         if (target is null) return;
         _selectedTargetId = targetId;
@@ -797,18 +1039,22 @@ public sealed class RdrAsset : INotifyPropertyChanged
     public uint Id { get; }
     private bool _isEnabled, _isOperating, _isConnected;
     private int _azimuthDeg, _elevationDeg;
+    private float _positionX, _positionY, _fieldOfViewDeg;
     public bool IsEnabled { get => _isEnabled; private set => Set(ref _isEnabled, value); }
     public bool IsOperating { get => _isOperating; private set => Set(ref _isOperating, value); }
     public bool IsConnected { get => _isConnected; private set => Set(ref _isConnected, value); }
     public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
     public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public float PositionX { get => _positionX; private set => Set(ref _positionX, value); }
+    public float PositionY { get => _positionY; private set => Set(ref _positionY, value); }
+    public float FieldOfViewDeg { get => _fieldOfViewDeg; private set => Set(ref _fieldOfViewDeg, value); }
     public string DisplayName => $"RDR-{Id:000}";
     public event PropertyChangedEventHandler? PropertyChanged;
-    public RdrAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, int azimuthDeg, int elevationDeg)
-    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, azimuthDeg, elevationDeg); }
-    public void UpdateFrom(RdrAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.AzimuthDeg, other.ElevationDeg);
-    private void UpdateFrom(bool enabled, bool operating, bool connected, int az, int el)
-    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; AzimuthDeg = az; ElevationDeg = el; }
+    public RdrAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, int azimuthDeg, int elevationDeg, float positionX, float positionY, float fieldOfViewDeg)
+    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, azimuthDeg, elevationDeg, positionX, positionY, fieldOfViewDeg); }
+    public void UpdateFrom(RdrAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.AzimuthDeg, other.ElevationDeg, other.PositionX, other.PositionY, other.FieldOfViewDeg);
+    private void UpdateFrom(bool enabled, bool operating, bool connected, int az, int el, float x, float y, float fov)
+    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; AzimuthDeg = az; ElevationDeg = el; PositionX = x; PositionY = y; FieldOfViewDeg = fov; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
 }
@@ -818,19 +1064,22 @@ public sealed class FcsAsset : INotifyPropertyChanged
     public uint Id { get; }
     private bool _isEnabled, _isOperating, _isConnected, _laserOn;
     private int _azimuthDeg, _elevationDeg;
+    private float _positionX, _positionY;
     public bool IsEnabled { get => _isEnabled; private set => Set(ref _isEnabled, value); }
     public bool IsOperating { get => _isOperating; private set => Set(ref _isOperating, value); }
     public bool IsConnected { get => _isConnected; private set => Set(ref _isConnected, value); }
     public bool LaserOn { get => _laserOn; private set => Set(ref _laserOn, value); }
     public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
     public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public float PositionX { get => _positionX; private set => Set(ref _positionX, value); }
+    public float PositionY { get => _positionY; private set => Set(ref _positionY, value); }
     public string DisplayName => $"FCS-{Id:000}";
     public event PropertyChangedEventHandler? PropertyChanged;
-    public FcsAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, bool laserOn, int azimuthDeg, int elevationDeg)
-    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, laserOn, azimuthDeg, elevationDeg); }
-    public void UpdateFrom(FcsAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.LaserOn, other.AzimuthDeg, other.ElevationDeg);
-    private void UpdateFrom(bool enabled, bool operating, bool connected, bool laser, int az, int el)
-    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; LaserOn = laser; AzimuthDeg = az; ElevationDeg = el; }
+    public FcsAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, bool laserOn, int azimuthDeg, int elevationDeg, float positionX, float positionY)
+    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, laserOn, azimuthDeg, elevationDeg, positionX, positionY); }
+    public void UpdateFrom(FcsAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.LaserOn, other.AzimuthDeg, other.ElevationDeg, other.PositionX, other.PositionY);
+    private void UpdateFrom(bool enabled, bool operating, bool connected, bool laser, int az, int el, float x, float y)
+    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; LaserOn = laser; AzimuthDeg = az; ElevationDeg = el; PositionX = x; PositionY = y; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
 }
