@@ -9,18 +9,18 @@ namespace AadcCommandCenter;
 public static class SharedMemoryProtocol
 {
     // 공유 메모리 매핑과 동기화 뮤텍스 이름
-    public const string DefaultName = "Local\\ControlStationMock.SharedMemory.v2";
-    public const string DefaultMutexName = "Local\\ControlStationMock.SharedMemory.Mutex.v2";
+    public const string DefaultName = "Local\\ControlStationMock.SharedMemory.v3";
+    public const string DefaultMutexName = "Local\\ControlStationMock.SharedMemory.Mutex.v3";
     // 프레임 식별값과 데이터 구조 버전
     public const uint Magic = 0x314D4354;
-    public const uint Version = 2;
+    public const uint Version = 3;
     // 프레임에 담을 자산 및 표적 최대 개수
     public const int RdrCapacity = 1;
     public const int FcsCapacity = 1;
     public const int TargetCapacity = 10;
     // 헤더와 페이로드의 크기(바이트)
     public const int HeaderSize = 32;
-    public const int PayloadSize = 452;
+    public const int PayloadSize = 460;
     public const int FrameSize = HeaderSize + PayloadSize;
 }
 
@@ -32,10 +32,11 @@ public struct SharedRdrAsset
     public uint isEnabled;         // 사용 가능 여부: 0=불가, 1=가능
     public uint isOperating;       // 구동 상태: 0=정지, 1=구동 중
     public uint isConnected;       // 연결 상태: 0=끊김, 1=연결됨
-    public int azimuthDeg;         // 현재 방위각: 0~270도, 화면 기준 -135~+135도
-    public int elevationDeg;       // 현재 고각: 0~90도
+    public float azimuthDeg;       // 현재 방위각: 0~270도
+    public float elevationDeg;     // 현재 고각: 0~90도
     public float positionX;       // 공통 평면 좌표계에서 RDR의 X 위치(미터)
     public float positionY;       // 공통 평면 좌표계에서 RDR의 Y 위치(미터)
+    public float positionZ;       // RDR의 Z 위치(미터)
     public float fieldOfViewDeg;  // 방위각 중심선을 기준으로 한 전체 시야각(도)
 }
 
@@ -48,10 +49,11 @@ public struct SharedFcsAsset
     public uint isOperating;       // 구동 상태: 0=정지, 1=구동 중
     public uint isConnected;       // 연결 상태: 0=끊김, 1=연결됨
     public uint laserOn;           // 레이저 상태: 0=꺼짐, 1=켜짐
-    public int azimuthDeg;         // 현재 방위각: 0~270도, 화면 기준 -135~+135도
-    public int elevationDeg;       // 현재 고각: 0~90도
+    public float azimuthDeg;       // 현재 방위각: 0~270도
+    public float elevationDeg;     // 현재 고각: 0~90도
     public float positionX;       // 공통 평면 좌표계에서 FCS의 X 위치(미터)
     public float positionY;       // 공통 평면 좌표계에서 FCS의 Y 위치(미터)
+    public float positionZ;       // FCS의 Z 위치(미터)
 }
 
 /// <summary>탐지된 표적의 방향, 좌표, 상태를 담는 공유 구조체</summary>
@@ -59,8 +61,8 @@ public struct SharedFcsAsset
 public struct SharedTarget
 {
     public uint targetId;          // 표적 고유 번호
-    public int azimuthDeg;         // RDR 기준 표적 방위각(도)
-    public int elevationDeg;       // 표적 고각(도)
+    public float azimuthDeg;       // RDR 기준 표적 방위각(도)
+    public float elevationDeg;     // 표적 고각(도)
     public float distanceM;        // RDR 기준 표적 거리(미터)
     public float lidarX;           // 공통 평면 좌표계에서 표적의 X 위치(미터)
     public float lidarY;           // 공통 평면 좌표계에서 표적의 Y 위치(미터)
@@ -146,7 +148,7 @@ public sealed class SharedMemoryFrameReader : IDisposable
 
     private static void ValidateManagedLayout()
     {
-        if (Marshal.SizeOf<SharedRdrAsset>() != 36 || Marshal.SizeOf<SharedFcsAsset>() != 36 ||
+        if (Marshal.SizeOf<SharedRdrAsset>() != 40 || Marshal.SizeOf<SharedFcsAsset>() != 40 ||
             Marshal.SizeOf<SharedTarget>() != 36 || Marshal.SizeOf<SharedPayload>() != SharedMemoryProtocol.PayloadSize ||
             Marshal.SizeOf<SharedFrameHeader>() != SharedMemoryProtocol.HeaderSize || Marshal.SizeOf<SharedFrame>() != SharedMemoryProtocol.FrameSize)
             throw new InvalidOperationException("C# 공유 메모리 구조체 크기가 C++ 프레임과 일치하지 않습니다.");

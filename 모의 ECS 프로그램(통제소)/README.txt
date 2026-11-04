@@ -1,4 +1,4 @@
-﻿ECS 통제소 모의 프로그램
+ECS 통제소 모의 프로그램
 
 파일 구성
 - ControlStationMock.cpp : 공유 메모리 송신 및 네임드 파이프 서버
@@ -25,24 +25,24 @@ ControlStationMock.exe
 고각 슬라이더
 - WPF의 라이다 고각 슬라이더(0~90도)는 Named Pipe의 SetRdrElevation 명령으로 모의 ECS에 전송
 - 모의 ECS는 요청을 수신한 뒤 다음 SharedMemory 프레임의 RDRAsset.elevationDeg에 반영
-- 고각 설정 요청에는 RDR ID와 targetId 필드의 정수 각도를 사용하며, 파이프 구조체 크기는 바뀌지 않음
-- RDR 고각은 적용 목표로 설정되며, 현재값은 초당 10도씩 이동해 공유 메모리에 송신
-- 표적 할당 후 FCS는 FCS 좌표에서 표적 위치까지의 방위각(초당 20도)과 표적 고각(초당 10도)에 맞춰 이동하고, 두 각도가 목표에 도달하면 할당 완료 응답
-- 공유 메모리는 100ms마다 갱신하며 모의 RDR 방위각은 초당 10도로 0~270도 왕복
+- 고각 설정 요청에는 RDR ID와 targetId 필드에 0.1도 단위의 정수 값을 사용하며, 파이프 구조체 크기는 바뀌지 않음
+- RDR 고각은 0.1도 단위 목표로 설정되며, 현재값은 최대 초당 25도씩 이동해 공유 메모리에 송신
+- 표적 할당 후 FCS는 FCS 좌표에서 표적 위치까지의 방위각·고각(각 최대 초당 25도)에 맞춰 이동하고, FCS 좌표에서 공유 메모리에 기록된 표적 위치까지의 목표 방위각과 고각이 맞으면 할당 완료 응답
+- 공유 메모리는 100ms마다 갱신하며 모의 RDR 방위각은 100ms마다 2도(초당 20도)씩 0~270도 왕복
 
 공유 메모리
 - 이름: Local\ControlStationMock.SharedMemory.v2
 - 뮤텍스: Local\ControlStationMock.SharedMemory.Mutex.v2
-- 프레임 크기: 484바이트 (프로토콜 버전 2)
-- RDRAsset: 36바이트 (위치 X/Y 및 전체 시야각 추가, 위치 단위 m)
-- FCSAsset: 36바이트 (위치 X/Y 추가, 위치 단위 m)
+- 프레임 크기: 492바이트 (프로토콜 버전 3)
+- RDRAsset: 40바이트 (각도 float, 위치 X/Y/Z 및 전체 시야각, 위치 단위 m)
+- FCSAsset: 40바이트 (각도 float, 위치 X/Y/Z, 위치 단위 m)
 - 표적 1001~1010의 데이터는 시작 시 생성하며 고정
 - sequence, timestampMs, checksum은 프레임마다 갱신
 
 네임드 파이프
 - 경로: \\.\pipe\ECS_NamedPipe
-- 프로토콜 버전: 2
-- PipeCommand 크기: 28바이트
+- 프로토콜 버전: 3
+- PipeCommand 크기: 40바이트
 - PipeResponse 크기: 40바이트
 
 참고
@@ -61,3 +61,13 @@ Windows 콘솔의 유니코드 입출력을 위해 _setmode를 적용했습니�
 - 격추된 표적 상태는 이후 공유 메모리 프레임에서도 유지
 - FCSAsset.laserOn을 1로 설정하고 5초 경과 후 0으로 자동 전환
 - reset 명령을 실행하면 레이저와 격추 표적 기록을 초기화
+
+WPF 자산 좌표 편집
+- RDR/FCS의 X/Y/Z 좌표 변경은 SetAssetPosition 파이프 명령으로 모의 ECS에 전달
+- 모의 ECS는 변경된 좌표를 보존해 다음 공유 메모리 프레임에 전송
+- RDR/FCS와 표적 방위각·고각은 float로 송신되며 화면에는 소수점 한 자리까지 표시; FCS 방위각은 0~360도 전체 회전 지원
+
+RDR 작동 상태
+- 모의 ECS 시작 시 RDR은 비활성 상태로 시작
+- WPF 감시 자산 패널의 라이다 구동/라이다 정지 버튼을 통해 Named Pipe로 상태 변경
+- 정지 상태에서는 RDR 방위각 주사만 멈추며 공유 메모리와 표적 데이터 송신은 계속

@@ -1,4 +1,4 @@
-﻿// ECS 통제소 모의 프로그램
+// ECS 통제소 모의 프로그램
 // 공유 메모리에 고정 표적 10개를 1초마다 기록하고 WPF와 네임드 파이프로 통신
 // 빌드: cl /utf-8 /std:c++17 /EHsc ControlStationMock.cpp /Fe:ControlStationMock.exe
 
@@ -26,8 +26,8 @@
 
 namespace
 {
-    constexpr wchar_t kMappingName[] = L"Local\\ControlStationMock.SharedMemory.v2";
-    constexpr wchar_t kMutexName[] = L"Local\\ControlStationMock.SharedMemory.Mutex.v2";
+    constexpr wchar_t kMappingName[] = L"Local\\ControlStationMock.SharedMemory.v3";
+    constexpr wchar_t kMutexName[] = L"Local\\ControlStationMock.SharedMemory.Mutex.v3";
     constexpr DWORD kMappingSize = 4096;
 
     std::mutex g_consoleMutex;
@@ -37,12 +37,13 @@ namespace
 
     bool g_connected = true;
     bool g_available = true;
-    std::int32_t g_rdrElevationDeg = 0;
-    std::int32_t g_rdrElevationTargetDeg = 0;
-    std::int32_t g_fcsAzimuthDeg = 135;
-    std::int32_t g_fcsElevationDeg = 0;
-    std::int32_t g_fcsTargetAzimuthDeg = 135;
-    std::int32_t g_fcsTargetElevationDeg = 0;
+    bool g_rdrOperating = false;
+    float g_rdrElevationDeg = 0;
+    float g_rdrElevationTargetDeg = 0;
+    float g_fcsAzimuthDeg = 135;
+    float g_fcsElevationDeg = 0;
+    float g_fcsTargetAzimuthDeg = 135;
+    float g_fcsTargetElevationDeg = 0;
     std::uint32_t g_targetId = 0;
     std::uint32_t g_fcsId = 1;
     AssignmentState g_assignment = AssignmentState::Idle;
@@ -50,6 +51,10 @@ namespace
     bool g_laserOn = false;
     std::chrono::steady_clock::time_point g_laserOffAt{};
     std::array<bool, kMaxTargets> g_targetKilled{};
+    std::array<float, kMaxTargets> g_targetX{};
+    std::array<float, kMaxTargets> g_targetY{};
+    float g_rdrX = -0.5f, g_rdrY = 0.0f, g_rdrZ = 0.0f;
+    float g_fcsX = 0.5f, g_fcsY = 0.0f, g_fcsZ = 0.0f;
 
     void CompleteAdjustmentIfAligned();
 
@@ -68,15 +73,15 @@ namespace
             duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count());
     }
 
-    std::int32_t TargetAzimuth(std::uint32_t targetId)
+    float TargetAzimuth(std::uint32_t targetId)
     {
-        return static_cast<std::int32_t>((targetId - 1001) * 30);
+        return static_cast<float>(targetId - 1001) * 29.5f + 0.3f;
     }
 
-    std::int32_t TargetElevation(std::uint32_t targetId)
+    float TargetElevation(std::uint32_t targetId)
     {
         const auto index = targetId - 1001;
-        return static_cast<std::int32_t>(5 + (index * 4) % 45);
+        return 5.3f + std::fmod(static_cast<float>(index) * 4.7f, 45.0f);
     }
 
     double TargetDistance(std::uint32_t targetId)
@@ -87,27 +92,38 @@ namespace
     double TargetPositionX(std::uint32_t targetId)
     {
         const auto bearing = (TargetAzimuth(targetId) - 135) * 3.14159265358979323846 / 180.0;
-        return -0.5 + std::sin(bearing) * TargetDistance(targetId);
+        return g_rdrX + std::sin(bearing) * TargetDistance(targetId);
     }
 
     double TargetPositionY(std::uint32_t targetId)
     {
         const auto bearing = (TargetAzimuth(targetId) - 135) * 3.14159265358979323846 / 180.0;
-        return std::cos(bearing) * TargetDistance(targetId);
+        return g_rdrY + std::cos(bearing) * TargetDistance(targetId);
     }
 
-    std::int32_t TargetAzimuthFromFcs(std::uint32_t targetId)
+    float TargetAzimuthFromFcs(std::uint32_t targetId)
     {
         // FCS bearing is measured from the FCS origin, not copied from the RDR-relative target angle.
-        const auto bearing = std::atan2(TargetPositionX(targetId) - 0.5, TargetPositionY(targetId)) * 180.0 / 3.14159265358979323846;
-        return std::clamp(static_cast<std::int32_t>(std::lround(bearing + 135.0)), 0, 270);
+        const auto index = targetId - 1001;
+        const auto bearing = std::atan2(g_targetX[index] - g_fcsX, g_targetY[index] - g_fcsY) * 180.0 / 3.14159265358979323846;
+        float azimuth = static_cast<float>(bearing + 135.0);
+        if (azimuth < 0.0f) azimuth += 360.0f;
+        return azimuth;
     }
 
-    std::int32_t MoveToward(std::int32_t current, std::int32_t target, std::int32_t step)
+    float MoveToward(float current, float target, float step)
     {
         if (current < target) return std::min(current + step, target);
         if (current > target) return std::max(current - step, target);
         return current;
+    }
+
+    float MoveTowardAzimuth(float current, float target, float step)
+    {
+        float difference = std::fmod(target - current + 540.0f, 360.0f) - 180.0f;
+        if (std::fabs(difference) <= step) return target;
+        float next = std::fmod(current + std::copysign(step, difference), 360.0f);
+        return next < 0.0f ? next + 360.0f : next;
     }
 
     // 페이로드 데이터의 FNV-1a 32비트 체크섬 계산
@@ -136,6 +152,8 @@ namespace
             target.distanceM = 250.0f + static_cast<float>(i) * 95.0f;
             target.lidarX = static_cast<float>(TargetPositionX(target.targetId));
             target.lidarY = static_cast<float>(TargetPositionY(target.targetId));
+            g_targetX[i] = target.lidarX;
+            g_targetY[i] = target.lidarY;
             target.lidarZ = 8.0f + static_cast<float>(i) * 2.0f;
             target.rdrId = 1;
             target.status = kTargetAlive;
@@ -154,12 +172,13 @@ namespace
         RDRAsset& rdr = payload.rdrAssets[0];
         rdr.rdrId = 1;
         rdr.isEnabled = 1;
-        rdr.isOperating = 1;
+        rdr.isOperating = g_rdrOperating ? 1u : 0u;
         rdr.isConnected = 1;
         rdr.azimuthDeg = 0;
         rdr.elevationDeg = 0;
-        rdr.positionX = -0.5f;
-        rdr.positionY = 0.0f;
+        rdr.positionX = g_rdrX;
+        rdr.positionY = g_rdrY;
+        rdr.positionZ = g_rdrZ;
         rdr.fieldOfViewDeg = 90.0f;
 
         FCSAsset& fcs = payload.fcsAssets[0];
@@ -170,8 +189,9 @@ namespace
         fcs.laserOn = 0;
         fcs.azimuthDeg = g_fcsAzimuthDeg;
         fcs.elevationDeg = g_fcsElevationDeg;
-        fcs.positionX = 0.5f;
-        fcs.positionY = 0.0f;
+        fcs.positionX = g_fcsX;
+        fcs.positionY = g_fcsY;
+        fcs.positionZ = g_fcsZ;
 
         InitializeFixedTargets(payload);
     }
@@ -213,8 +233,8 @@ namespace
         Print(L"[공유 메모리] 송신 시작. 고정 표적 10개, 갱신 주기 100ms");
 
         auto nextTick = std::chrono::steady_clock::now();
-        std::int32_t mockRdrAzimuth = 0;
-        std::int32_t mockRdrDirection = 1;
+        float mockRdrAzimuth = 0.0f;
+        float mockRdrDirection = 2.0f;
         while (g_running)
         {
             nextTick += std::chrono::milliseconds(100);
@@ -237,22 +257,33 @@ namespace
                 }
 
                 frame.payload.rdrAssets[0].isConnected = g_connected ? 1u : 0u;
+                frame.payload.rdrAssets[0].isOperating = g_rdrOperating ? 1u : 0u;
+                frame.payload.targetCount = kMaxTargets;
+                frame.payload.rdrAssets[0].positionX = g_rdrX;
+                frame.payload.rdrAssets[0].positionY = g_rdrY;
+                frame.payload.rdrAssets[0].positionZ = g_rdrZ;
                 // 모의 RDR는 화면의 -135~+135도 범위를 10도/초로 왕복 주사
-                mockRdrAzimuth += mockRdrDirection;
-                if (mockRdrAzimuth >= 270 || mockRdrAzimuth <= 0)
+                if (g_rdrOperating)
                 {
-                    mockRdrAzimuth = std::clamp(mockRdrAzimuth, 0, 270);
-                    mockRdrDirection *= -1;
+                    mockRdrAzimuth += mockRdrDirection;
+                    if (mockRdrAzimuth >= 270.0f || mockRdrAzimuth <= 0.0f)
+                    {
+                        mockRdrAzimuth = std::clamp(mockRdrAzimuth, 0.0f, 270.0f);
+                        mockRdrDirection *= -1;
+                    }
                 }
                 frame.payload.rdrAssets[0].azimuthDeg = mockRdrAzimuth;
                 if (g_connected)
-                    g_rdrElevationDeg = MoveToward(g_rdrElevationDeg, g_rdrElevationTargetDeg, 1); // 10도/초
+                    g_rdrElevationDeg = MoveToward(g_rdrElevationDeg, g_rdrElevationTargetDeg, 2.5f); // 100ms당 최대 2.5도, 25도/초
                 frame.payload.rdrAssets[0].elevationDeg = g_rdrElevationDeg;
                 frame.payload.fcsAssets[0].isConnected = g_connected ? 1u : 0u;
+                frame.payload.fcsAssets[0].positionX = g_fcsX;
+                frame.payload.fcsAssets[0].positionY = g_fcsY;
+                frame.payload.fcsAssets[0].positionZ = g_fcsZ;
                 if (g_connected && g_available && g_assignment == AssignmentState::Adjusting)
                 {
-                    g_fcsAzimuthDeg = MoveToward(g_fcsAzimuthDeg, g_fcsTargetAzimuthDeg, 2); // 20도/초
-                    g_fcsElevationDeg = MoveToward(g_fcsElevationDeg, g_fcsTargetElevationDeg, 1); // 10도/초
+                    g_fcsAzimuthDeg = MoveTowardAzimuth(g_fcsAzimuthDeg, g_fcsTargetAzimuthDeg, 2.5f); // 100ms당 최대 2.5도
+                    g_fcsElevationDeg = MoveToward(g_fcsElevationDeg, g_fcsTargetElevationDeg, 2.5f); // 100ms당 최대 2.5도, 25도/초
                 }
                 frame.payload.fcsAssets[0].azimuthDeg = g_fcsAzimuthDeg;
                 frame.payload.fcsAssets[0].elevationDeg = g_fcsElevationDeg;
@@ -317,6 +348,7 @@ namespace
         case CommandType::CancelAssignment: return L"할당 취소";
         case CommandType::Fire: return L"모의 교전";
         case CommandType::SetRdrElevation: return L"RDR 고각 설정";
+        case CommandType::SetRdrOperating: return L"라이다 구동 상태 설정";
         default: return L"알 수 없는 명령";
         }
     }
@@ -384,9 +416,9 @@ namespace
     void CompleteAdjustmentIfAligned()
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
-        if (g_assignment != AssignmentState::Adjusting ||
-            g_fcsAzimuthDeg != g_fcsTargetAzimuthDeg ||
-            g_fcsElevationDeg != g_fcsTargetElevationDeg)
+        const float azimuthError = std::fabs(std::fmod(g_fcsAzimuthDeg - g_fcsTargetAzimuthDeg + 540.0f, 360.0f) - 180.0f);
+        if (g_assignment != AssignmentState::Adjusting || azimuthError > 0.05f ||
+            std::fabs(g_fcsElevationDeg - g_fcsTargetElevationDeg) > 0.05f)
             return;
 
         g_assignment = AssignmentState::Assigned;
@@ -401,11 +433,11 @@ namespace
         ResultCode result = ResultCode::Success;
 
         if (command.magic != kPipeMagic || command.version != kPipeVersion ||
-            command.requestId == 0 || command.rdrId == 0 || command.fcsId == 0)
+            command.requestId == 0 || (command.commandType == static_cast<std::uint32_t>(CommandType::SetAssetPosition) ? (command.rdrId == 0) == (command.fcsId == 0) : (command.rdrId == 0 || command.fcsId == 0)))
         {
             result = ResultCode::InvalidRequest;
         }
-        else if (command.commandType > static_cast<std::uint32_t>(CommandType::SetRdrElevation))
+        else if (command.commandType > static_cast<std::uint32_t>(CommandType::SetRdrOperating))
         {
             result = ResultCode::NotSupported;
         }
@@ -419,13 +451,26 @@ namespace
             case CommandType::SetRdrElevation:
                 if (!g_connected)
                     result = ResultCode::AssetUnavailable;
-                else if (command.rdrId != 1 || command.targetId > 90)
+                else if (command.rdrId != 1 || command.targetId > 900)
                     result = ResultCode::InvalidRequest;
                 else
                 {
-                    g_rdrElevationTargetDeg = static_cast<std::int32_t>(command.targetId);
+                    g_rdrElevationTargetDeg = static_cast<float>(command.targetId) / 10.0f;
                     Print(L"[센서] RDR-001 고각 설정 요청 · 목표 " + std::to_wstring(g_rdrElevationTargetDeg) + L"도, 현재 " + std::to_wstring(g_rdrElevationDeg) + L"도");
                 }
+                break;
+
+            case CommandType::SetRdrOperating:
+                if (!g_connected) result = ResultCode::AssetUnavailable;
+                else if (command.rdrId != 1 || command.targetId > 1) result = ResultCode::InvalidRequest;
+                else { g_rdrOperating = command.targetId == 1; Print(g_rdrOperating ? L"[감시 자산] 라이다 구동" : L"[감시 자산] 라이다 정지"); }
+                break;
+
+            case CommandType::SetAssetPosition:
+                if (!g_connected) result = ResultCode::AssetUnavailable;
+                else if (command.rdrId == 1 && command.fcsId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_rdrX=command.positionX; g_rdrY=command.positionY; g_rdrZ=command.positionZ; }
+                else if (command.fcsId == 1 && command.rdrId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_fcsX=command.positionX; g_fcsY=command.positionY; g_fcsZ=command.positionZ; }
+                else result = ResultCode::InvalidRequest;
                 break;
 
             case CommandType::AssignTarget:
@@ -612,9 +657,9 @@ int wmain()
 
     std::wcout
         << L"ECS 통제소 모의 프로그램\n"
-        << L"공유 메모리: Local\\ControlStationMock.SharedMemory.v2\n"
+        << L"공유 메모리: Local\\ControlStationMock.SharedMemory.v3\n"
         << L"네임드 파이프: \\\\.\\pipe\\ECS_NamedPipe | 프로토콜 버전 2\n"
-        << L"고정 표적: 10개(1001~1010) | 갱신 주기: 100ms | 모터: AZ 20°/s, EL 10°/s\n"
+        << L"고정 표적: 10개(1001~1010) | 갱신 주기: 100ms | 모터: AZ 25°/s, EL 25°/s\n"
         << L"명령어: help, status, connected on|off, available on|off, reset, quit\n";
 
     std::thread shmThread(SharedMemoryLoop);
