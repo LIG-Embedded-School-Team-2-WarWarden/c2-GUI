@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <cstdint>
 
@@ -10,7 +10,7 @@
 constexpr std::uint32_t kPipeMagic = 0x50495045;
 
 // 네임드 파이프 통신 프로토콜 버전
-constexpr std::uint32_t kPipeVersion = 2;
+constexpr std::uint32_t kPipeVersion = 3;
 
 // Windows 네임드 파이프 경로
 constexpr wchar_t kPipePath[] = L"\\\\.\\pipe\\ECS_NamedPipe";
@@ -26,7 +26,9 @@ enum class CommandType : std::uint32_t
     AssignTarget = 1,    // 표적 할당 요청
     CancelAssignment = 2,// 표적 할당 취소 요청
     Fire = 3,            // 모의 교전 결과 요청
-    SetRdrElevation = 4  // RDR 고각 설정 요청, targetId 필드에 각도(0~90도)
+    SetRdrElevation = 4, // RDR 고각 설정, targetId는 0.1도 단위
+    SetAssetPosition = 5, // RDR/FCS 좌표 설정
+    SetRdrOperating = 6 // RDR 동작 상태 설정
 };
 
 
@@ -79,8 +81,11 @@ struct PipeCommand
     std::uint32_t requestId;    // 요청과 응답을 짝짓는 순번
     std::uint32_t rdrId;        // 명령 대상 RDR ID
     std::uint32_t fcsId;        // 명령 대상 FCS ID
-    std::uint32_t targetId;     // 표적 ID, 표적 없음은 0; SetRdrElevation 요청에서는 고각(0~90도)
-}; // 전체 크기: 28바이트
+    std::uint32_t targetId;     // 표적 ID, 고각 설정은 0.1도 단위
+    float positionX;            // 자산 X 좌표(m)
+    float positionY;            // 자산 Y 좌표(m)
+    float positionZ;            // 자산 Z 좌표(m)
+}; // 전체 크기: 40바이트
 
 
 // ============================================================
@@ -110,5 +115,5 @@ struct PipeResponse
 // 컴파일 시 구조체 크기 검증
 // ============================================================
 
-static_assert(sizeof(PipeCommand) == 28, "PipeCommand 크기 오류");
+static_assert(sizeof(PipeCommand) == 40, "PipeCommand 크기 오류");
 static_assert(sizeof(PipeResponse) == 40, "PipeResponse 크기 오류");

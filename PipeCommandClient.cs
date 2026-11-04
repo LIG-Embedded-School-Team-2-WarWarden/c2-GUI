@@ -11,7 +11,9 @@ internal enum CommandType : uint
     AssignTarget = 1,       // 표적을 타격자산에 할당
     CancelAssignment = 2,   // 현재 표적 할당 취소
     Fire = 3,               // 할당된 표적에 발사 명령
-    SetRdrElevation = 4     // RDR 목표 고각 설정, PipeCommand.TargetId에 정수 각도(0~90도) 전달
+    SetRdrElevation = 4,    // RDR 고각 설정, TargetId는 0.1도 단위
+    SetAssetPosition = 5,   // 자산 좌표 설정, X/Y/Z는 미터 단위
+    SetRdrOperating = 6     // RDR 동작 상태 설정, TargetId: 0=비활성, 1=작동
 }
 
 /// <summary>Named Pipe 명령 처리 결과</summary>
@@ -46,6 +48,9 @@ internal struct PipeCommand
     public uint RdrId;       // 명령 대상 RDR ID
     public uint FcsId;       // 명령 대상 FCS ID
     public uint TargetId;    // 표적 ID, 미사용은 0; 고각 설정 명령에서는 목표 고각(0~90도)
+    public float PositionX;
+    public float PositionY;
+    public float PositionZ;
 }
 
 /// <summary>ECS에서 WPF로 돌려주는 40바이트 응답 구조체</summary>
@@ -67,7 +72,7 @@ internal struct PipeResponse
 internal sealed class PipeCommandClient : IDisposable
 {
     internal const uint Magic = 0x50495045;
-    internal const uint Version = 2;
+    internal const uint Version = 3;
     private const string Server = ".";
     private const string PipeName = "ECS_NamedPipe";
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -75,7 +80,7 @@ internal sealed class PipeCommandClient : IDisposable
     private uint requestId = 1;
     public bool IsConnected => pipe?.IsConnected == true;
 
-    public async Task<PipeResponse> SendAsync(CommandType type, uint targetId = 0, uint rdrId = 1, uint fcsId = 1, CancellationToken cancellationToken = default)
+    public async Task<PipeResponse> SendAsync(CommandType type, uint targetId = 0, uint rdrId = 1, uint fcsId = 1, CancellationToken cancellationToken = default, float positionX = 0, float positionY = 0, float positionZ = 0)
     {
         await gate.WaitAsync(cancellationToken);
         try
@@ -89,7 +94,8 @@ internal sealed class PipeCommandClient : IDisposable
                 RequestId = requestId++,
                 RdrId = rdrId,
                 FcsId = fcsId,
-                TargetId = targetId
+                TargetId = targetId,
+                PositionX = positionX, PositionY = positionY, PositionZ = positionZ
             };
             try
             {

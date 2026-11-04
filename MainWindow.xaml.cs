@@ -7,6 +7,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 
@@ -32,10 +33,14 @@ public partial class MainWindow : Window
     private uint? _selectedTargetId;
     private double _workspaceZoom = 1.0;
     private bool _workspaceLayoutRefreshQueued;
+    private bool _rdrPositionDirty, _fcsPositionDirty;
+    private bool _syncingPositionInputs;
+    private bool _rdrOperatingCommandPending;
+    private bool? _requestedRdrOperating;
     private bool _updatingRdrElevationSlider;
     private bool _updatingRdrElevationInput;
     private bool _rdrElevationInputDirty;
-    private int? _requestedRdrElevation;
+    private int? _requestedRdrElevationTenths;
     private readonly string _eventLogPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AadcCommandCenter", "event-log.txt");
 
     public MainWindow()
@@ -62,6 +67,7 @@ public partial class MainWindow : Window
             }
             _isSharedMemoryLive = isLive;
             UpdateRdrElevationControl(RdrSelector.SelectedItem as RdrAsset);
+            UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset);
             SharedMemoryStatus.Text = state;
             SharedMemoryStatus.Foreground = isLive
                 ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
@@ -92,9 +98,9 @@ public partial class MainWindow : Window
             _targetFcsSelections[existingTarget.Id] = existingTarget.SelectedFcsId;
 
         var rdrs = payload.rdrAssets.Take((int)payload.rdrCount)
-            .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.fieldOfViewDeg)).ToArray();
+            .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.positionZ, x.fieldOfViewDeg)).ToArray();
         var fcs = payload.fcsAssets.Take((int)payload.fcsCount)
-            .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY)).ToArray();
+            .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.positionZ)).ToArray();
         var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1)
             .Select(x => new TargetRecord(x.targetId, x.azimuthDeg, x.elevationDeg, x.distanceM, x.lidarX, x.lidarY, x.lidarZ, x.rdrId, x.status, x.valid == 1,
                 _targetFcsSelections.TryGetValue(x.targetId, out var selectedFcsId) ? selectedFcsId : payload.selectedFcsId,
@@ -220,7 +226,7 @@ public partial class MainWindow : Window
 
     private void RdrSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _requestedRdrElevation = null;
+        _requestedRdrElevationTenths = null;
         _rdrElevationInputDirty = false;
         _rdrElevationSendTimer.Stop();
         var rdr = RdrSelector.SelectedItem as RdrAsset;
@@ -229,21 +235,62 @@ public partial class MainWindow : Window
         SyncRdrElevationFromTelemetry(rdr);
     }
 
+    private async void RdrOperatingToggleClick(object sender, RoutedEventArgs e)
+    {
+        if (RdrSelector.SelectedItem is not RdrAsset rdr || !_isSharedMemoryLive || _rdrOperatingCommandPending || _requestedRdrOperating is not null)
+            return;
+
+        var requestedOperating = !rdr.IsOperating;
+        _rdrOperatingCommandPending = true;
+        UpdateRdrOperatingControl(rdr);
+        try
+        {
+            var response = await _pipeClient.SendAsync(CommandType.SetRdrOperating, requestedOperating ? 1u : 0u, rdr.Id);
+            if ((ResultCode)response.ResultCode != ResultCode.Success)
+                throw new IOException(CommandResultText((ResultCode)response.ResultCode));
+
+            _requestedRdrOperating = requestedOperating;
+            AddLog($"감시 자산 {rdr.DisplayName} · {(requestedOperating ? "라이다 구동" : "라이다 정지")} 요청");
+        }
+        catch (Exception ex)
+        {
+            ShowAlert($"라이다 상태 변경에 실패했습니다: {ex.Message}", "감시 자산 제어 실패");
+        }
+        finally
+        {
+            _rdrOperatingCommandPending = false;
+            UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset);
+        }
+    }
+
+    private void UpdateRdrOperatingControl(RdrAsset? rdr)
+    {
+        if (RdrOperatingToggleButton is null) return;
+        if (rdr is not null && _requestedRdrOperating == rdr.IsOperating)
+            _requestedRdrOperating = null;
+        RdrOperatingToggleButton.Content = rdr?.IsOperating == true ? "라이다 정지" : "라이다 구동";
+        RdrOperatingToggleButton.IsEnabled = _isSharedMemoryLive && rdr is not null && rdr.IsConnected &&
+            !_rdrOperatingCommandPending && _requestedRdrOperating is null;
+    }
+
     private void RadarCanvasSizeChanged(object sender, SizeChangedEventArgs e) => DrawRadar();
 
     private void RdrElevationSliderValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_updatingRdrElevationSlider || RdrElevationSliderValue is null) return;
-        var degrees = Math.Clamp((int)Math.Round(e.NewValue), 0, 90);
-        RdrElevationSliderValue.Text = $"{degrees}°";
+        var degrees = Math.Clamp((float)Math.Round(e.NewValue, 1), 0f, 90f);
+        RdrElevationSliderValue.Text = $"{degrees:0.0}°";
         if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset) return;
         _rdrElevationInputDirty = false;
         SetRdrElevationInputText(degrees);
-        QueueRdrElevationCommand(degrees);
+        QueueRdrElevationCommand((int)Math.Round(degrees * 10));
     }
 
-    private void RdrElevationInputPreviewTextInput(object sender, TextCompositionEventArgs e) =>
-        e.Handled = !e.Text.All(char.IsDigit);
+    private void RdrElevationInputPreviewTextInput(object sender, TextCompositionEventArgs e)
+    {
+        var separator = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
+        e.Handled = !e.Text.All(c => char.IsDigit(c) || c.ToString() == separator || c == '.' || c == ',');
+    }
 
     private void RdrElevationInputTextChanged(object sender, TextChangedEventArgs e)
     {
@@ -254,23 +301,24 @@ public partial class MainWindow : Window
     private void RdrElevationInputApplyClick(object sender, RoutedEventArgs e)
     {
         AddLog("라이다 고각 입력 적용 버튼 클릭");
-        if (!int.TryParse(RdrElevationInput.Text, out var degrees) || degrees is < 0 or > 90)
+        if (!float.TryParse(RdrElevationInput.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var degrees) || !float.IsFinite(degrees) || degrees is < 0 or > 90)
         {
             AddLog($"라이다 고각 입력 거부 · 입력값 '{RdrElevationInput.Text}' · 허용 범위 0~90°");
-            ShowAlert("고각은 0부터 90 사이의 정수로 입력하세요.", "고각 입력 확인");
-            RdrElevationInput.Text = ((int)Math.Round(RdrElevationSlider.Value)).ToString();
+            ShowAlert("고각은 0.0부터 90.0 사이의 값으로 입력하세요.", "고각 입력 확인");
+            RdrElevationInput.Text = RdrElevationSlider.Value.ToString("0.0");
             return;
         }
 
+        degrees = MathF.Round(degrees, 1);
         _rdrElevationInputDirty = false;
         SetRdrElevationSlider(degrees);
-        QueueRdrElevationCommand(degrees);
+        QueueRdrElevationCommand((int)Math.Round(degrees * 10));
     }
 
-    private void QueueRdrElevationCommand(int degrees)
+    private void QueueRdrElevationCommand(int degreesTenths)
     {
         if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset) return;
-        _requestedRdrElevation = degrees;
+        _requestedRdrElevationTenths = degreesTenths;
         _rdrElevationSendTimer.Stop();
         _rdrElevationSendTimer.Start();
     }
@@ -278,33 +326,33 @@ public partial class MainWindow : Window
     private void SyncRdrElevationFromTelemetry(RdrAsset? rdr)
     {
         if (rdr is null) return;
-        if (_requestedRdrElevation == rdr.ElevationDeg)
+        if (_requestedRdrElevationTenths == (int)Math.Round(rdr.ElevationDeg * 10))
         {
-            _requestedRdrElevation = null;
+            _requestedRdrElevationTenths = null;
         }
-        if (_requestedRdrElevation is int requested)
+        if (_requestedRdrElevationTenths is int requested)
         {
-            SetRdrElevationSlider(requested);
+            SetRdrElevationSlider(requested / 10f);
             return;
         }
         SetRdrElevationSlider(Math.Clamp(rdr.ElevationDeg, 0, 90));
     }
 
-    private void SetRdrElevationSlider(int degrees)
+    private void SetRdrElevationSlider(float degrees)
     {
         if (RdrElevationSlider is null) return;
         _updatingRdrElevationSlider = true;
         RdrElevationSlider.Value = Math.Clamp(degrees, 0, 90);
-        var clampedDegrees = Math.Clamp(degrees, 0, 90);
-        RdrElevationSliderValue.Text = $"{clampedDegrees}°";
+        var clampedDegrees = Math.Clamp(degrees, 0f, 90f);
+        RdrElevationSliderValue.Text = $"{clampedDegrees:0.0}°";
         if (!_rdrElevationInputDirty) SetRdrElevationInputText(clampedDegrees);
         _updatingRdrElevationSlider = false;
     }
 
-    private void SetRdrElevationInputText(int degrees)
+    private void SetRdrElevationInputText(float degrees)
     {
         _updatingRdrElevationInput = true;
-        RdrElevationInput.Text = Math.Clamp(degrees, 0, 90).ToString();
+        RdrElevationInput.Text = Math.Clamp(degrees, 0f, 90f).ToString("0.0", System.Globalization.CultureInfo.CurrentCulture);
         _updatingRdrElevationInput = false;
     }
 
@@ -317,23 +365,23 @@ public partial class MainWindow : Window
 
     private async Task SendRdrElevationCommandAsync()
     {
-        if (_requestedRdrElevation is not int degrees || RdrSelector.SelectedItem is not RdrAsset rdr || !_isSharedMemoryLive)
+        if (_requestedRdrElevationTenths is not int degreesTenths || RdrSelector.SelectedItem is not RdrAsset rdr || !_isSharedMemoryLive)
             return;
         try
         {
-            var response = await _pipeClient.SendAsync(CommandType.SetRdrElevation, (uint)degrees, rdr.Id);
+            var response = await _pipeClient.SendAsync(CommandType.SetRdrElevation, (uint)degreesTenths, rdr.Id);
             if ((ResultCode)response.ResultCode != ResultCode.Success)
                 throw new IOException(CommandResultText((ResultCode)response.ResultCode));
 
-            AddLog($"라이다 고각 설정 요청 · {rdr.DisplayName} {degrees}°");
-            if ((int)Math.Round(RdrElevationSlider.Value) != degrees)
+            AddLog($"라이다 고각 설정 요청 · {rdr.DisplayName} {degreesTenths / 10f:0.0}°");
+            if ((int)Math.Round(RdrElevationSlider.Value * 10) != degreesTenths)
                 _rdrElevationSendTimer.Start();
         }
         catch (Exception ex)
         {
-            if ((int)Math.Round(RdrElevationSlider.Value) == degrees)
+            if ((int)Math.Round(RdrElevationSlider.Value * 10) == degreesTenths)
             {
-                _requestedRdrElevation = null;
+                _requestedRdrElevationTenths = null;
                 SyncRdrElevationFromTelemetry(rdr);
             }
             else
@@ -342,12 +390,77 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void RdrPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(true);
+    private async void FcsPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(false);
+    private void RdrPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(RdrPositionEditor, RdrPositionToggleButton, "RDR 위치 수정", "RDR 위치 접기");
+    private void FcsPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(FcsPositionEditor, FcsPositionToggleButton, "FCS 위치 수정", "FCS 위치 접기");
+
+    private static void TogglePositionEditor(Border editor, Button button, string openText, string closeText)
+    {
+        var currentHeight = editor.ActualHeight;
+        var opening = editor.Visibility != Visibility.Visible || Equals(button.Content, openText);
+        editor.BeginAnimation(FrameworkElement.HeightProperty, null);
+        if (opening)
+        {
+            editor.Visibility = Visibility.Visible;
+            editor.Height = 0;
+            button.Content = closeText;
+            var animation = new DoubleAnimation(0, 58, TimeSpan.FromMilliseconds(220))
+            {
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+            };
+            animation.Completed += (_, _) => { editor.Height = 58; editor.BeginAnimation(FrameworkElement.HeightProperty, null); };
+            editor.BeginAnimation(FrameworkElement.HeightProperty, animation);
+        }
+        else
+        {
+            var animation = new DoubleAnimation(currentHeight, 0, TimeSpan.FromMilliseconds(180));
+            animation.Completed += (_, _) => { editor.Visibility = Visibility.Collapsed; editor.Height = 0; button.Content = openText; };
+            editor.BeginAnimation(FrameworkElement.HeightProperty, animation);
+        }
+    }
+    private void RdrPositionTextChanged(object sender, TextChangedEventArgs e) { if (!_syncingPositionInputs) _rdrPositionDirty = true; }
+    private void FcsPositionTextChanged(object sender, TextChangedEventArgs e) { if (!_syncingPositionInputs) _fcsPositionDirty = true; }
+
+    private async Task ApplyAssetPositionAsync(bool isRdr)
+    {
+        var xText = isRdr ? RdrXInput.Text : FcsXInput.Text;
+        var yText = isRdr ? RdrYInput.Text : FcsYInput.Text;
+        var zText = isRdr ? RdrZInput.Text : FcsZInput.Text;
+        if (!TryCoordinate(xText, out var x) || !TryCoordinate(yText, out var y) || !TryCoordinate(zText, out var z))
+        {
+            ShowAlert("좌표 X, Y, Z를 유효한 숫자로 입력하세요.", "좌표 입력 확인");
+            return;
+        }
+        var rdr = RdrSelector.SelectedItem as RdrAsset;
+        var fcs = FcsSelector.SelectedItem as FcsAsset;
+        if (!_isSharedMemoryLive || (isRdr ? rdr is null : fcs is null))
+        {
+            ShowAlert("공유 메모리와 연결된 자산이 필요합니다.", "좌표 적용 불가");
+            return;
+        }
+        try
+        {
+            var response = await _pipeClient.SendAsync(CommandType.SetAssetPosition, rdrId: isRdr ? rdr!.Id : 0, fcsId: isRdr ? 0 : fcs!.Id,
+                positionX: x, positionY: y, positionZ: z);
+            if ((ResultCode)response.ResultCode != ResultCode.Success)
+                throw new IOException(CommandResultText((ResultCode)response.ResultCode));
+            if (isRdr) _rdrPositionDirty = false; else _fcsPositionDirty = false;
+            AddLog($"{(isRdr ? "RDR" : "FCS")} 좌표 변경 · X={x:0.###}, Y={y:0.###}, Z={z:0.###} m");
+        }
+        catch (Exception ex) { ShowAlert($"좌표 적용에 실패했습니다: {ex.Message}", "좌표 적용 실패"); }
+    }
+
+    private static bool TryCoordinate(string value, out float coordinate) =>
+        float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out coordinate) && float.IsFinite(coordinate);
+
     private void RefreshRdrInfo(RdrAsset? rdr)
     {
         if (RdrIdText is null) return;
         if (!_isSharedMemoryLive || rdr is null)
         {
             UpdateRdrElevationControl(rdr);
+            UpdateRdrOperatingControl(rdr);
             RdrIdText.Text = rdr?.DisplayName ?? "NULL";
             RdrEnabledText.Text = RdrOperatingText.Text = RdrConnectedText.Text = RdrAzText.Text = RdrElText.Text = "NULL";
             SetRdrValueForeground(Brushes.Orange);
@@ -357,9 +470,14 @@ public partial class MainWindow : Window
         }
         RdrIdText.Text = rdr.DisplayName;
         RdrEnabledText.Text = YesNo(rdr.IsEnabled); RdrOperatingText.Text = YesNo(rdr.IsOperating); RdrConnectedText.Text = YesNo(rdr.IsConnected);
-        RdrAzText.Text = $"{rdr.AzimuthDeg:0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0}°";
+        RdrAzText.Text = $"{rdr.AzimuthDeg:0.0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0.0}°";
+        if (!_rdrPositionDirty) { _syncingPositionInputs = true; RdrXInput.Text = rdr.PositionX.ToString("0.###"); RdrYInput.Text = rdr.PositionY.ToString("0.###"); RdrZInput.Text = rdr.PositionZ.ToString("0.###"); _syncingPositionInputs = false; }
         UpdateRdrElevationControl(rdr);
         SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
+        RdrOperatingText.Foreground = rdr.IsOperating
+            ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
+            : new SolidColorBrush(Color.FromRgb(255, 176, 0));
+        UpdateRdrOperatingControl(rdr);
         RdrStatusLine.Text = $"{rdr.DisplayName} · {(rdr.IsConnected ? "CONNECTED" : "DISCONNECTED")} · {(rdr.IsOperating ? "OPERATING" : "STOPPED")}";
         RdrStatusLine.Foreground = rdr.IsConnected && rdr.IsOperating ? new SolidColorBrush(Color.FromRgb(0, 230, 138)) : Brushes.Orange;
         DrawRadar();
@@ -388,7 +506,8 @@ public partial class MainWindow : Window
         FcsIdText.Text = fcs.DisplayName;
         FcsEnabledText.Text = YesNo(fcs.IsEnabled); FcsOperatingText.Text = YesNo(fcs.IsOperating); FcsConnectedText.Text = YesNo(fcs.IsConnected);
         FcsLaserText.Text = fcs.LaserOn ? "ON" : "OFF";
-        FcsAzText.Text = $"{fcs.AzimuthDeg:0}°"; FcsElText.Text = $"{fcs.ElevationDeg:0}°";
+        FcsAzText.Text = $"{fcs.AzimuthDeg:0.0}°"; FcsElText.Text = $"{fcs.ElevationDeg:0.0}°";
+        if (!_fcsPositionDirty) { _syncingPositionInputs = true; FcsXInput.Text = fcs.PositionX.ToString("0.###"); FcsYInput.Text = fcs.PositionY.ToString("0.###"); FcsZInput.Text = fcs.PositionZ.ToString("0.###"); _syncingPositionInputs = false; }
         var normalColor = new SolidColorBrush(Color.FromRgb(0, 230, 138));
         SetFcsValueForeground(normalColor);
         FcsLaserText.Foreground = fcs.LaserOn
@@ -497,7 +616,7 @@ public partial class MainWindow : Window
 
         if (fcs is not null && fcsPoint is Point orientationPoint)
         {
-            var fcsDisplayAzimuth = Math.Clamp(fcs.AzimuthDeg, 0, 270) - 135d;
+            var fcsDisplayAzimuth = fcs.AzimuthDeg - 135d;
             var fcsAngle = fcsDisplayAzimuth * Math.PI / 180d;
             const double directionLength = 24;
             RadarCanvas.Children.Add(new Line
@@ -997,8 +1116,8 @@ public sealed class AssignmentView : INotifyPropertyChanged
             RefreshStateText(null, fcs);
             return;
         }
-        AzimuthText = $"{target.AzimuthDeg:0}°";
-        ElevationText = $"{target.ElevationDeg:0}°";
+        AzimuthText = $"{target.AzimuthDeg:0.0}°";
+        ElevationText = $"{target.ElevationDeg:0.0}°";
         DistanceText = $"{target.DistanceM:0.00}";
         LidarXText = $"{target.LidarX:0.00}";
         LidarYText = $"{target.LidarY:0.00}";
@@ -1038,23 +1157,24 @@ public sealed class RdrAsset : INotifyPropertyChanged
 {
     public uint Id { get; }
     private bool _isEnabled, _isOperating, _isConnected;
-    private int _azimuthDeg, _elevationDeg;
-    private float _positionX, _positionY, _fieldOfViewDeg;
+    private float _azimuthDeg, _elevationDeg;
+    private float _positionX, _positionY, _positionZ, _fieldOfViewDeg;
     public bool IsEnabled { get => _isEnabled; private set => Set(ref _isEnabled, value); }
     public bool IsOperating { get => _isOperating; private set => Set(ref _isOperating, value); }
     public bool IsConnected { get => _isConnected; private set => Set(ref _isConnected, value); }
-    public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
-    public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public float AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
+    public float ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
     public float PositionX { get => _positionX; private set => Set(ref _positionX, value); }
     public float PositionY { get => _positionY; private set => Set(ref _positionY, value); }
+    public float PositionZ { get => _positionZ; private set => Set(ref _positionZ, value); }
     public float FieldOfViewDeg { get => _fieldOfViewDeg; private set => Set(ref _fieldOfViewDeg, value); }
     public string DisplayName => $"RDR-{Id:000}";
     public event PropertyChangedEventHandler? PropertyChanged;
-    public RdrAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, int azimuthDeg, int elevationDeg, float positionX, float positionY, float fieldOfViewDeg)
-    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, azimuthDeg, elevationDeg, positionX, positionY, fieldOfViewDeg); }
-    public void UpdateFrom(RdrAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.AzimuthDeg, other.ElevationDeg, other.PositionX, other.PositionY, other.FieldOfViewDeg);
-    private void UpdateFrom(bool enabled, bool operating, bool connected, int az, int el, float x, float y, float fov)
-    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; AzimuthDeg = az; ElevationDeg = el; PositionX = x; PositionY = y; FieldOfViewDeg = fov; }
+    public RdrAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, float azimuthDeg, float elevationDeg, float positionX, float positionY, float positionZ, float fieldOfViewDeg)
+    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, azimuthDeg, elevationDeg, positionX, positionY, positionZ, fieldOfViewDeg); }
+    public void UpdateFrom(RdrAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.AzimuthDeg, other.ElevationDeg, other.PositionX, other.PositionY, other.PositionZ, other.FieldOfViewDeg);
+    private void UpdateFrom(bool enabled, bool operating, bool connected, float az, float el, float x, float y, float z, float fov)
+    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; AzimuthDeg = az; ElevationDeg = el; PositionX = x; PositionY = y; PositionZ = z; FieldOfViewDeg = fov; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
 }
@@ -1063,23 +1183,24 @@ public sealed class FcsAsset : INotifyPropertyChanged
 {
     public uint Id { get; }
     private bool _isEnabled, _isOperating, _isConnected, _laserOn;
-    private int _azimuthDeg, _elevationDeg;
-    private float _positionX, _positionY;
+    private float _azimuthDeg, _elevationDeg;
+    private float _positionX, _positionY, _positionZ;
     public bool IsEnabled { get => _isEnabled; private set => Set(ref _isEnabled, value); }
     public bool IsOperating { get => _isOperating; private set => Set(ref _isOperating, value); }
     public bool IsConnected { get => _isConnected; private set => Set(ref _isConnected, value); }
     public bool LaserOn { get => _laserOn; private set => Set(ref _laserOn, value); }
-    public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
-    public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public float AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
+    public float ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
     public float PositionX { get => _positionX; private set => Set(ref _positionX, value); }
     public float PositionY { get => _positionY; private set => Set(ref _positionY, value); }
+    public float PositionZ { get => _positionZ; private set => Set(ref _positionZ, value); }
     public string DisplayName => $"FCS-{Id:000}";
     public event PropertyChangedEventHandler? PropertyChanged;
-    public FcsAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, bool laserOn, int azimuthDeg, int elevationDeg, float positionX, float positionY)
-    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, laserOn, azimuthDeg, elevationDeg, positionX, positionY); }
-    public void UpdateFrom(FcsAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.LaserOn, other.AzimuthDeg, other.ElevationDeg, other.PositionX, other.PositionY);
-    private void UpdateFrom(bool enabled, bool operating, bool connected, bool laser, int az, int el, float x, float y)
-    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; LaserOn = laser; AzimuthDeg = az; ElevationDeg = el; PositionX = x; PositionY = y; }
+    public FcsAsset(uint id, bool isEnabled, bool isOperating, bool isConnected, bool laserOn, float azimuthDeg, float elevationDeg, float positionX, float positionY, float positionZ)
+    { Id = id; UpdateFrom(isEnabled, isOperating, isConnected, laserOn, azimuthDeg, elevationDeg, positionX, positionY, positionZ); }
+    public void UpdateFrom(FcsAsset other) => UpdateFrom(other.IsEnabled, other.IsOperating, other.IsConnected, other.LaserOn, other.AzimuthDeg, other.ElevationDeg, other.PositionX, other.PositionY, other.PositionZ);
+    private void UpdateFrom(bool enabled, bool operating, bool connected, bool laser, float az, float el, float x, float y, float z)
+    { IsEnabled = enabled; IsOperating = operating; IsConnected = connected; LaserOn = laser; AzimuthDeg = az; ElevationDeg = el; PositionX = x; PositionY = y; PositionZ = z; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     { if (EqualityComparer<T>.Default.Equals(field, value)) return; field = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)); }
 }
@@ -1088,13 +1209,13 @@ public sealed class TargetRecord : INotifyPropertyChanged
 {
     private uint _selectedFcsId;
     public uint Id { get; }
-    private int _azimuthDeg, _elevationDeg;
+    private float _azimuthDeg, _elevationDeg;
     private float _distanceM, _lidarX, _lidarY, _lidarZ;
     private uint _rdrId;
     private byte _status, _valid;
     private bool _isAssigned, _isAssignmentPending;
-    public int AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
-    public int ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
+    public float AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
+    public float ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
     public float DistanceM { get => _distanceM; private set => Set(ref _distanceM, value); }
     public float LidarX { get => _lidarX; private set => Set(ref _lidarX, value); }
     public float LidarY { get => _lidarY; private set => Set(ref _lidarY, value); }
@@ -1106,8 +1227,8 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public bool IsAssignmentPending { get => _isAssignmentPending; set => Set(ref _isAssignmentPending, value); }
     public uint SelectedFcsId { get => _selectedFcsId; set { if (_selectedFcsId == value) return; _selectedFcsId = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedFcsId))); } }
     public string DisplayName => $"TGT-{Id}";
-    public string AzimuthText => $"{AzimuthDeg:0}°";
-    public string ElevationText => $"{ElevationDeg:0}°";
+    public string AzimuthText => $"{AzimuthDeg:0.0}°";
+    public string ElevationText => $"{ElevationDeg:0.0}°";
     public string DistanceText => $"{DistanceM:0.00}";
     public string LidarXText => LidarX.ToString("0.00");
     public string LidarYText => LidarY.ToString("0.00");
@@ -1116,13 +1237,13 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public string ValidText => Valid == 1 ? "YES" : "NO";
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public TargetRecord(uint id, int azimuthDeg, int elevationDeg, float distanceM, float lidarX, float lidarY, float lidarZ, uint rdrId, byte status, bool valid, uint selectedFcsId, bool isAssigned)
+    public TargetRecord(uint id, float azimuthDeg, float elevationDeg, float distanceM, float lidarX, float lidarY, float lidarZ, uint rdrId, byte status, bool valid, uint selectedFcsId, bool isAssigned)
     {
         Id = id; _selectedFcsId = selectedFcsId; _isAssigned = isAssigned;
         UpdateFrom(azimuthDeg, elevationDeg, distanceM, lidarX, lidarY, lidarZ, rdrId, status, valid ? (byte)1 : (byte)0);
     }
     public void UpdateFrom(TargetRecord other) => UpdateFrom(other.AzimuthDeg, other.ElevationDeg, other.DistanceM, other.LidarX, other.LidarY, other.LidarZ, other.RdrId, other.Status, other.Valid);
-    private void UpdateFrom(int az, int el, float distance, float x, float y, float z, uint rdrId, byte status, byte valid)
+    private void UpdateFrom(float az, float el, float distance, float x, float y, float z, uint rdrId, byte status, byte valid)
     { AzimuthDeg = az; ElevationDeg = el; DistanceM = distance; LidarX = x; LidarY = y; LidarZ = z; RdrId = rdrId; Status = status; Valid = valid; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
