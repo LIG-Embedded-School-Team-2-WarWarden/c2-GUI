@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 
@@ -74,7 +74,7 @@ internal sealed class PipeCommandClient : IDisposable
     internal const uint Magic = 0x50495045;
     internal const uint Version = 3;
     private const string Server = ".";
-    private const string PipeName = "ECS_NamedPipe";
+    private static readonly string PipeName = Environment.GetEnvironmentVariable("AADC9_PIPE_NAME") ?? "ECS_NamedPipe";
     private readonly SemaphoreSlim gate = new(1, 1);
     private NamedPipeClientStream? pipe;
     private uint requestId = 1;
