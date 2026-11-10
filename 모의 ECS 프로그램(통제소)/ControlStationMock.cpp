@@ -50,6 +50,7 @@ namespace
     std::uint32_t g_fireState = 0;
     bool g_laserOn = false;
     std::chrono::steady_clock::time_point g_laserOffAt{};
+    std::chrono::steady_clock::time_point g_fcsBusyUntil{};
     std::array<bool, kMaxTargets> g_targetKilled{};
     std::array<float, kMaxTargets> g_targetX{};
     std::array<float, kMaxTargets> g_targetY{};
@@ -349,6 +350,7 @@ namespace
         case CommandType::Fire: return L"모의 교전";
         case CommandType::SetRdrElevation: return L"RDR 고각 설정";
         case CommandType::SetRdrOperating: return L"라이다 구동 상태 설정";
+        case CommandType::GetFcsBusy: return L"FCS 작업 상태 조회";
         default: return L"알 수 없는 명령";
         }
     }
@@ -431,21 +433,30 @@ namespace
         CompleteAdjustmentIfAligned();
         std::lock_guard<std::mutex> lock(g_stateMutex);
         ResultCode result = ResultCode::Success;
+        const auto type = static_cast<CommandType>(command.commandType);
+        const auto now = std::chrono::steady_clock::now();
+        const bool fcsBusy = now < g_fcsBusyUntil;
 
         if (command.magic != kPipeMagic || command.version != kPipeVersion ||
             command.requestId == 0 || (command.commandType == static_cast<std::uint32_t>(CommandType::SetAssetPosition) ? (command.rdrId == 0) == (command.fcsId == 0) : (command.rdrId == 0 || command.fcsId == 0)))
         {
             result = ResultCode::InvalidRequest;
         }
-        else if (command.commandType > static_cast<std::uint32_t>(CommandType::SetRdrOperating))
+        else if (type > CommandType::GetFcsBusy)
         {
             result = ResultCode::NotSupported;
         }
         else
         {
-            switch (static_cast<CommandType>(command.commandType))
+            switch (type)
             {
             case CommandType::GetStatus:
+                break;
+
+            case CommandType::GetFcsBusy:
+                if (command.rdrId != 1 || command.fcsId != 1) result = ResultCode::InvalidRequest;
+                else if (!g_connected) result = ResultCode::AssetUnavailable;
+                else if (!g_available) result = ResultCode::DeviceError;
                 break;
 
             case CommandType::SetRdrElevation:
@@ -474,7 +485,7 @@ namespace
                 break;
 
             case CommandType::AssignTarget:
-                if (!g_connected || !g_available)
+                if (!g_connected || !g_available || fcsBusy)
                     result = ResultCode::AssetUnavailable;
                 else if (command.targetId < 1001 || command.targetId > 1010)
                     result = ResultCode::InvalidRequest;
@@ -508,7 +519,7 @@ namespace
 
             case CommandType::Fire:
                 // UI와 IPC 연동 확인용 모의 상태만 변경하며 실제 장비를 제어하지 않음
-                if (!g_connected || !g_available)
+                if (!g_connected || !g_available || fcsBusy)
                     result = ResultCode::AssetUnavailable;
                 else if (g_assignment != AssignmentState::Assigned)
                     result = ResultCode::NotAssigned;
@@ -517,7 +528,9 @@ namespace
                     // 교전 명령이 수락되면 현재 표적을 격추 처리하고 레이저를 5초간 켬
                     g_fireState = 1;
                     g_laserOn = true;
-                    g_laserOffAt = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                    g_laserOffAt = now + std::chrono::seconds(5);
+                    // Keep the mock device busy after the display turns off and the assignment is canceled.
+                    g_fcsBusyUntil = g_laserOffAt + std::chrono::seconds(2);
 
                     if (g_targetId >= 1001 && g_targetId <= 1010)
                     {
@@ -534,7 +547,9 @@ namespace
         return PipeResponse{
             kPipeMagic, kPipeVersion, command.requestId, command.commandType,
             static_cast<std::uint32_t>(result), g_fcsId, g_targetId,
-            static_cast<std::uint32_t>(g_assignment), g_fireState, g_connected ? 1u : 0u
+            static_cast<std::uint32_t>(g_assignment),
+            type == CommandType::GetFcsBusy ? (result == ResultCode::Success && fcsBusy ? 1u : 0u) : g_fireState,
+            g_connected ? 1u : 0u
         };
     }
 
@@ -552,7 +567,8 @@ namespace
         line << L" -> " << ResultName(response.resultCode)
              << L", 할당 상태=" << AssignmentName(response.assignmentState)
              << L", 할당 표적=" << response.assignedTargetId
-             << L", 모의 교전 상태=" << response.fireState;
+             << (request.commandType == static_cast<std::uint32_t>(CommandType::GetFcsBusy)
+                 ? L", FCS busy=" : L", 모의 교전 상태=") << response.fireState;
         Print(line.str());
     }
 
@@ -637,6 +653,7 @@ namespace
         g_fireState = 0;
         g_laserOn = false;
         g_laserOffAt = {};
+        g_fcsBusyUntil = {};
         g_targetKilled.fill(false);
     }
 
