@@ -28,7 +28,8 @@ enum class CommandType : std::uint32_t
     Fire = 3,            // 모의 교전 결과 요청
     SetRdrElevation = 4, // RDR 고각 설정, targetId는 0.1도 단위
     SetAssetPosition = 5, // RDR/FCS 좌표 설정
-    SetRdrOperating = 6 // RDR 동작 상태 설정
+    SetRdrOperating = 6, // RDR 동작 상태 설정
+    GetFcsBusy = 7      // 성공 응답의 fireState: 1=작업 중, 0=작업 종료
 };
 
 

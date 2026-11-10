@@ -12,6 +12,11 @@ cl /utf-8 /std:c++17 /EHsc ControlStationMock.cpp /Fe:ControlStationMock.exe
 실행
 ControlStationMock.exe
 
+순차 할당 대기 확인
+- GUI에서 객체 2개를 순차 처리하면 첫 객체의 레이저 표시가 5초 뒤 꺼지고 할당이 취소됩니다.
+- 모의 FCS는 레이저 표시가 꺼진 뒤 2초 동안 작업 중으로 응답합니다. GUI는 이때 FCS 작업 종료 대기를 표시하고, 해제 확인 후 두 번째 객체를 할당합니다.
+- GetFcsBusy(7)의 성공 응답은 fireState=1(작업 중) 또는 0(작업 종료)을 반환합니다. 기존 GetStatus 응답과 IPC 구조체 크기는 그대로입니다.
+
 콘솔 명령어
 - help
 - status
