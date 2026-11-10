@@ -886,7 +886,7 @@ public partial class MainWindow : Window
                 sequenceOwnsCurrentAssignment = false;
                 if (waitForFcs)
                 {
-                    item.ResultText = "FCS 작업 종료 대기";
+                    item.ResultText = SequenceQueueItem.FcsBusyWait;
                     RefreshSequenceQueue();
                     if (!await WaitForFcsIdleAsync(item))
                     {
@@ -1395,6 +1395,7 @@ public sealed class DashboardData
 
 public sealed class SequenceQueueItem : INotifyPropertyChanged
 {
+    internal const string FcsBusyWait = "FCS 작업 종료 대기";
     private string _orderText = "", _resultText = "대기";
     private bool _isSelected;
     public uint TargetId { get; }
@@ -1404,7 +1405,7 @@ public sealed class SequenceQueueItem : INotifyPropertyChanged
     public string FcsName => $"FCS-{FcsId:000}";
     public string StatusText => _resultText switch
     {
-        "대기" => "대기",
+        "대기" or FcsBusyWait => "대기",
         "할당 요청" => "할당",
         "조준 중" => "조준",
         "발사 중" => "발사",
