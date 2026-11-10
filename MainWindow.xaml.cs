@@ -875,6 +875,7 @@ public partial class MainWindow : Window
         SequenceStartButton.Content = "중지 요청";
         AddLog($"{selectedQueueFcs.DisplayName} 표적 순차 할당 시작 · {pendingItems.Length}개 표적");
         var sequenceOwnsCurrentAssignment = false;
+        var waitForFcs = false;
         SequenceQueueItem? currentSequenceItem = null;
         try
         {
@@ -883,6 +884,16 @@ public partial class MainWindow : Window
                 if (_stopSequenceRequested) break;
                 currentSequenceItem = item;
                 sequenceOwnsCurrentAssignment = false;
+                if (waitForFcs)
+                {
+                    item.ResultText = "FCS 작업 종료 대기";
+                    RefreshSequenceQueue();
+                    if (!await WaitForFcsIdleAsync(item))
+                    {
+                        item.ResultText = "대기";
+                        break;
+                    }
+                }
                 item.ResultText = "할당 요청";
                 RefreshSequenceQueue();
                 var target = _data.Targets.FirstOrDefault(x => x.Id == item.TargetId);
@@ -895,6 +906,11 @@ public partial class MainWindow : Window
                 ApplyCommandResponse(status);
                 if ((AssignmentState)status.AssignmentState != AssignmentState.Idle || status.AssignedTargetId != 0)
                     throw new InvalidOperationException("FCS에 진행 중인 수동 할당이 있습니다. 기존 할당을 취소한 뒤 다시 시작하세요.");
+                if (_stopSequenceRequested)
+                {
+                    item.ResultText = "대기";
+                    break;
+                }
 
                 var assigned = await SendPipeCommandAsync(CommandType.AssignTarget, item.RdrId, item.FcsId, item.TargetId, "순차 표적 할당");
                 if (assigned is null || (ResultCode)assigned.Value.ResultCode != ResultCode.Success)
@@ -941,6 +957,7 @@ public partial class MainWindow : Window
                 } while (true);
                 var canceledAfterFire = await _pipeClient.SendAsync(CommandType.CancelAssignment, 0, item.RdrId, item.FcsId);
                 if ((ResultCode)canceledAfterFire.ResultCode != ResultCode.Success) throw new InvalidOperationException($"{TargetName(item.TargetId)} 발사 후 할당 취소 실패: {CommandResultText((ResultCode)canceledAfterFire.ResultCode)}");
+                waitForFcs = true;
                 item.ResultText = "완료 · 발사 후 자동 취소";
                 RefreshSequenceQueue();
                 if (!_stopSequenceRequested) AddLog($"순차 처리 완료 · {TargetName(item.TargetId)} · 자동 취소 완료");
@@ -972,6 +989,35 @@ public partial class MainWindow : Window
             SequenceStartButton.IsEnabled = true;
             RefreshSequenceQueue();
             UpdateQueueUploadControl();
+        }
+    }
+
+    private async Task<bool> WaitForFcsIdleAsync(SequenceQueueItem item)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            while (!_stopSequenceRequested)
+            {
+                var response = await _pipeClient.SendAsync(CommandType.GetFcsBusy,
+                    rdrId: item.RdrId, fcsId: item.FcsId, cancellationToken: timeout.Token);
+                if (_stopSequenceRequested) return false;
+                var result = (ResultCode)response.ResultCode;
+                if (result == ResultCode.NotSupported)
+                    throw new InvalidOperationException("ECS가 FCS 작업 상태 조회를 지원하지 않습니다. ECS를 먼저 업데이트하세요.");
+                if (response.IsConnected == 0)
+                    throw new InvalidOperationException("FCS 작업 종료 대기 중 연결이 끊겼습니다.");
+                if (result == ResultCode.Success && response.FireState == 0) return true;
+                if (result != ResultCode.Success && result != ResultCode.AssetUnavailable && result != ResultCode.StatusPending)
+                    throw new InvalidOperationException($"FCS 작업 상태 조회 실패 · {CommandResultText(result)}");
+                await Task.Delay(250, timeout.Token);
+            }
+            return false;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            if (_stopSequenceRequested) return false;
+            throw new TimeoutException("FCS 작업 종료 대기 시간 초과");
         }
     }
 
@@ -1245,6 +1291,8 @@ public partial class MainWindow : Window
         ResultCode.AlreadyAssigned => "타격자산에 이미 다른 표적이 할당되어 있습니다",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
+        ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
+        ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
         _ => "알 수 없는 명령 응답입니다"
     };
 
