@@ -1008,7 +1008,7 @@ public partial class MainWindow : Window
                 if (response.IsConnected == 0)
                     throw new InvalidOperationException("FCS 작업 종료 대기 중 연결이 끊겼습니다.");
                 if (result == ResultCode.Success && response.FireState == 0) return true;
-                if (result != ResultCode.Success && result != ResultCode.AssetUnavailable)
+                if (result != ResultCode.Success && result != ResultCode.AssetUnavailable && result != ResultCode.StatusPending)
                     throw new InvalidOperationException($"FCS 작업 상태 조회 실패 · {CommandResultText(result)}");
                 await Task.Delay(250, timeout.Token);
             }
@@ -1291,6 +1291,8 @@ public partial class MainWindow : Window
         ResultCode.AlreadyAssigned => "타격자산에 이미 다른 표적이 할당되어 있습니다",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
+        ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
+        ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
         _ => "알 수 없는 명령 응답입니다"
     };
 

@@ -26,7 +26,9 @@ internal enum ResultCode : uint
     NotAssigned = 3,     // 발사·취소할 표적이 할당되지 않음
     AlreadyAssigned = 4, // 타격자산에 이미 표적이 할당됨
     NotSupported = 5,    // 지원하지 않는 명령 종류
-    DeviceError = 6      // 모의 장치 처리 중 오류 발생
+    DeviceError = 6,     // 모의 장치 처리 중 오류 발생
+    StatusPending = 7,   // 확장 응답에서 새 상태를 기다리는 중
+    DeviceFault = 10     // 확장 응답에서 장비가 준비되지 않음
 }
 
 /// <summary>타격자산의 표적 할당 진행 상태</summary>
