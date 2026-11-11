@@ -1,7 +1,7 @@
 <Window x:Class="AadcCommandCenter.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AADC-9 | 대공방어 통제 시스템" Width="1500" Height="850"
+        Title="AADC-9" Width="1500" Height="850"
         MinWidth="760" MinHeight="480" WindowState="Maximized" Background="#07100F" Foreground="#C3D6CE"
         FontFamily="Consolas" WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown">
   <Window.Resources>
