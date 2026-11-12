@@ -7,10 +7,10 @@ namespace AadcCommandCenter;
 /// <summary>ECS에 보낼 Named Pipe 명령 종류</summary>
 internal enum CommandType : uint
 {
-    GetStatus = 0,          // 현재 연결과 표적 할당 상태 조회
-    AssignTarget = 1,       // 표적을 타격자산에 할당
-    CancelAssignment = 2,   // 현재 표적 할당 취소
-    Fire = 3,               // 할당된 표적에 발사 명령
+    GetStatus = 0,          // 현재 연결과 객체 할당 상태 조회
+    AssignTarget = 1,       // 객체를 FCS에 할당
+    CancelAssignment = 2,   // 현재 객체 할당 취소
+    Fire = 3,               // 할당된 객체에 실행 명령
     SetRdrElevation = 4,    // RDR 고각 설정, TargetId는 0.1도 단위
     SetAssetPosition = 5,   // 자산 좌표 설정, X/Y/Z는 미터 단위
     SetRdrOperating = 6,    // RDR 동작 상태 설정, TargetId: 0=비활성, 1=작동
@@ -23,21 +23,21 @@ internal enum ResultCode : uint
     Success = 0,          // 요청 처리 성공
     InvalidRequest = 1,   // 요청 필드나 값이 잘못됨
     AssetUnavailable = 2,// 자산 연결이 끊겼거나 사용할 수 없음
-    NotAssigned = 3,     // 발사·취소할 표적이 할당되지 않음
-    AlreadyAssigned = 4, // 타격자산에 이미 표적이 할당됨
+    NotAssigned = 3,     // 실행·취소할 객체가 할당되지 않음
+    AlreadyAssigned = 4, // FCS에 이미 객체가 할당됨
     NotSupported = 5,    // 지원하지 않는 명령 종류
     DeviceError = 6,     // 모의 장치 처리 중 오류 발생
     StatusPending = 7,   // 확장 응답에서 새 상태를 기다리는 중
     DeviceFault = 10     // 확장 응답에서 장비가 준비되지 않음
 }
 
-/// <summary>타격자산의 표적 할당 진행 상태</summary>
+/// <summary>FCS의 객체 할당 진행 상태</summary>
 internal enum AssignmentState : uint
 {
-    Idle = 0,       // 할당된 표적 없음
-    Adjusting = 1,  // 타격자산이 표적 방향으로 조정 중
-    Assigned = 2,   // 표적 방위각과 고각에 도달
-    Failed = 3      // 표적 할당 실패
+    Idle = 0,       // 할당된 객체 없음
+    Adjusting = 1,  // FCS이 객체 방향으로 조정 중
+    Assigned = 2,   // 객체 방위각과 고각에 도달
+    Failed = 3      // 객체 할당 실패
 }
 
 /// <summary>WPF에서 ECS로 보내는 28바이트 요청 구조체</summary>
@@ -50,7 +50,7 @@ internal struct PipeCommand
     public uint RequestId;   // 응답과 짝짓는 요청 순번
     public uint RdrId;       // 명령 대상 RDR ID
     public uint FcsId;       // 명령 대상 FCS ID
-    public uint TargetId;    // 표적 ID, 미사용은 0; 고각 설정 명령에서는 목표 고각(0~90도)
+    public uint TargetId;    // 객체 ID, 미사용은 0; 고각 설정 명령에서는 목표 고각(0~90도)
     public float PositionX;
     public float PositionY;
     public float PositionZ;
@@ -66,9 +66,9 @@ internal struct PipeResponse
     public uint CommandType;       // 처리한 CommandType 값
     public uint ResultCode;        // 처리 결과를 나타내는 ResultCode 값
     public uint FcsId;             // 응답 상태에 해당하는 FCS ID
-    public uint AssignedTargetId;  // 현재 할당된 표적 ID, 미할당은 0
-    public uint AssignmentState;   // 현재 표적 할당 단계를 나타내는 AssignmentState 값
-    public uint FireState;         // 발사 상태: 0=대기, 1=발사 결과 확인
+    public uint AssignedTargetId;  // 현재 할당된 객체 ID, 미할당은 0
+    public uint AssignmentState;   // 현재 객체 할당 단계를 나타내는 AssignmentState 값
+    public uint FireState;         // 실행 상태: 0=대기, 1=실행 결과 확인
     public uint IsConnected;       // ECS 연결 상태: 0=끊김, 1=연결됨
 }
 

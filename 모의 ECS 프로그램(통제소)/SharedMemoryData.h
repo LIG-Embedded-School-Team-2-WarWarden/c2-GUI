@@ -18,21 +18,21 @@ constexpr std::uint32_t kMaxRDRAssets = 1;
 // 공유 메모리에서 관리하는 최대 FCS 자산 수
 constexpr std::uint32_t kMaxFCSAssets = 1;
 
-// 공유 메모리에서 관리하는 최대 표적 수
+// 공유 메모리에서 관리하는 최대 객체 수
 constexpr std::uint32_t kMaxTargets = 10;
 
 
 // ============================================================
-// 표적 상태 상수
+// 객체 상태 상수
 // ============================================================
 
-// 표적이 정상적으로 존재하는 상태
+// 객체가 정상적으로 존재하는 상태
 constexpr std::uint8_t kTargetAlive = 0;
 
-// 표적이 격추된 것으로 처리된 상태
+// 객체가 격추된 것으로 처리된 상태
 constexpr std::uint8_t kTargetDead = 1;
 
-// 표적이 감지되지 않는 상태
+// 객체가 감지되지 않는 상태
 constexpr std::uint8_t kTargetMissing = 2;
 
 
@@ -85,26 +85,26 @@ struct FCSAsset
 
 
 // ============================================================
-// 표적 정보
+// 객체 정보
 // ============================================================
 
 struct Target
 {
-    std::uint32_t targetId;       // 표적 고유 번호
+    std::uint32_t targetId;       // 객체 고유 번호
 
-    float azimuthDeg;             // RDR 기준 표적 방위각(도)
-    float elevationDeg;           // 표적 고각(도)
+    float azimuthDeg;             // RDR 기준 객체 방위각(도)
+    float elevationDeg;           // 객체 고각(도)
 
-    float distanceM;              // RDR 기준 표적 거리(미터)
+    float distanceM;              // RDR 기준 객체 거리(미터)
 
-    float lidarX;                  // 공통 평면 좌표계에서 표적의 X 위치(미터)
-    float lidarY;                  // 공통 평면 좌표계에서 표적의 Y 위치(미터)
-    float lidarZ;                  // 라이다 좌표계에서 표적의 Z 위치(미터)
+    float lidarX;                  // 공통 평면 좌표계에서 객체의 X 위치(미터)
+    float lidarY;                  // 공통 평면 좌표계에서 객체의 Y 위치(미터)
+    float lidarZ;                  // 라이다 좌표계에서 객체의 Z 위치(미터)
 
-    std::uint32_t rdrId;           // 표적을 감지한 RDR 자산 번호
+    std::uint32_t rdrId;           // 객체를 감지한 RDR 자산 번호
 
-    std::uint8_t status;           // 표적 상태: 0=생존, 1=격추, 2=미검출
-    std::uint8_t valid;            // 슬롯 사용 여부: 0=미사용, 1=유효한 표적
+    std::uint8_t status;           // 객체 상태: 0=생존, 1=격추, 2=미검출
+    std::uint8_t valid;            // 슬롯 사용 여부: 0=미사용, 1=유효한 객체
     std::uint16_t reserved;        // 정렬과 향후 확장을 위한 예약값, 현재 0
 }; // 전체 크기: 36바이트
 
@@ -124,8 +124,8 @@ struct Payload
     std::uint32_t selectedRdrId;              // GUI에서 선택한 RDR ID, 0은 선택 없음
     std::uint32_t selectedFcsId;              // GUI에서 선택한 FCS ID, 0은 선택 없음
 
-    std::uint32_t targetCount;                // 현재 등록된 표적 수
-    Target targets[kMaxTargets];              // 표적 정보 목록
+    std::uint32_t targetCount;                // 현재 등록된 객체 수
+    Target targets[kMaxTargets];              // 객체 정보 목록
 }; // 전체 크기: 460바이트
 
 
@@ -154,7 +154,7 @@ struct FrameHeader
 struct Frame
 {
     FrameHeader header;                       // 프레임 식별·크기·순번·시각·체크섬 정보
-    Payload payload;                          // RDR/FCS 자산 상태와 표적 정보
+    Payload payload;                          // RDR/FCS 자산 상태와 객체 정보
 }; // 전체 크기: 484바이트
 
 // 이전에 설정한 구조체 정렬을 복원

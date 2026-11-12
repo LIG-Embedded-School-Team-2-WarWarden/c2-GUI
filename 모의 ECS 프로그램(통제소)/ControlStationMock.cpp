@@ -1,5 +1,5 @@
 // ECS 통제소 모의 프로그램
-// 공유 메모리에 고정 표적 10개를 1초마다 기록하고 WPF와 네임드 파이프로 통신
+// 공유 메모리에 고정 객체 10개를 1초마다 기록하고 WPF와 네임드 파이프로 통신
 // 빌드: cl /utf-8 /std:c++17 /EHsc ControlStationMock.cpp /Fe:ControlStationMock.exe
 
 #define WIN32_LEAN_AND_MEAN
@@ -139,7 +139,7 @@ namespace
         return hash;
     }
 
-    // 표적 10개의 정보를 시작 시 한 번 설정
+    // 객체 10개의 정보를 시작 시 한 번 설정
     void InitializeFixedTargets(Payload& payload)
     {
         payload.targetCount = kMaxTargets;
@@ -163,7 +163,7 @@ namespace
         }
     }
 
-    // RDR/FCS 자산과 고정 표적 목록을 초기화
+    // RDR/FCS 자산과 고정 객체 목록을 초기화
     void InitializeFramePayload(Payload& payload)
     {
         payload = {};
@@ -231,7 +231,7 @@ namespace
         Frame frame{};
         InitializeFramePayload(frame.payload);
         std::uint32_t sequence = 0;
-        Print(L"[공유 메모리] 송신 시작. 고정 표적 10개, 갱신 주기 100ms");
+        Print(L"[공유 메모리] 송신 시작. 고정 객체 10개, 갱신 주기 100ms");
 
         auto nextTick = std::chrono::steady_clock::now();
         float mockRdrAzimuth = 0.0f;
@@ -294,7 +294,7 @@ namespace
                 frame.payload.selectedRdrId = (g_targetId != 0) ? 1u : 0u;
                 frame.payload.selectedFcsId = (g_targetId != 0) ? g_fcsId : 0u;
 
-                // 격추 처리된 표적은 이후 프레임에서도 격추 상태를 유지
+                // 격추 처리된 객체는 이후 프레임에서도 격추 상태를 유지
                 for (std::uint32_t i = 0; i < kMaxTargets; ++i)
                 {
                     frame.payload.targets[i].status = g_targetKilled[i] ? kTargetDead : kTargetAlive;
@@ -345,7 +345,7 @@ namespace
         switch (static_cast<CommandType>(value))
         {
         case CommandType::GetStatus: return L"상태 조회";
-        case CommandType::AssignTarget: return L"표적 할당";
+        case CommandType::AssignTarget: return L"객체 할당";
         case CommandType::CancelAssignment: return L"할당 취소";
         case CommandType::Fire: return L"모의 교전";
         case CommandType::SetRdrElevation: return L"RDR 고각 설정";
@@ -363,15 +363,15 @@ namespace
         case ResultCode::Success: return L"성공";
         case ResultCode::InvalidRequest: return L"잘못된 요청";
         case ResultCode::AssetUnavailable: return L"자산 사용 불가";
-        case ResultCode::NotAssigned: return L"표적 미할당";
-        case ResultCode::AlreadyAssigned: return L"이미 표적 할당됨";
+        case ResultCode::NotAssigned: return L"객체 미할당";
+        case ResultCode::AlreadyAssigned: return L"이미 객체 할당됨";
         case ResultCode::NotSupported: return L"지원하지 않는 명령";
         case ResultCode::DeviceError: return L"모의 장치 오류";
         default: return L"알 수 없는 결과";
         }
     }
 
-    // 표적 할당 상태를 한글 설명으로 변환
+    // 객체 할당 상태를 한글 설명으로 변환
     std::wstring AssignmentName(std::uint32_t value)
     {
         switch (static_cast<AssignmentState>(value))
@@ -414,7 +414,7 @@ namespace
         return total == size;
     }
 
-    // FCS가 표적 방위각과 고각에 도달하면 할당 완료 처리
+    // FCS가 객체 방위각과 고각에 도달하면 할당 완료 처리
     void CompleteAdjustmentIfAligned()
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -424,7 +424,7 @@ namespace
             return;
 
         g_assignment = AssignmentState::Assigned;
-        Print(L"[상태] FCS 방위각/고각 목표 도달. 표적 할당 완료");
+        Print(L"[상태] FCS 방위각/고각 목표 도달. 객체 할당 완료");
     }
 
     // WPF 명령을 검증하고 모의 응답 생성
@@ -474,7 +474,7 @@ namespace
             case CommandType::SetRdrOperating:
                 if (!g_connected) result = ResultCode::AssetUnavailable;
                 else if (command.rdrId != 1 || command.targetId > 1) result = ResultCode::InvalidRequest;
-                else { g_rdrOperating = command.targetId == 1; Print(g_rdrOperating ? L"[감시 자산] 라이다 구동" : L"[감시 자산] 라이다 정지"); }
+                else { g_rdrOperating = command.targetId == 1; Print(g_rdrOperating ? L"[RDR] 라이다 구동" : L"[RDR] 라이다 정지"); }
                 break;
 
             case CommandType::SetAssetPosition:
@@ -525,7 +525,7 @@ namespace
                     result = ResultCode::NotAssigned;
                 else
                 {
-                    // 교전 명령이 수락되면 현재 표적을 격추 처리하고 레이저를 5초간 켬
+                    // 교전 명령이 수락되면 현재 객체를 격추 처리하고 레이저를 5초간 켬
                     g_fireState = 1;
                     g_laserOn = true;
                     g_laserOffAt = now + std::chrono::seconds(5);
@@ -537,7 +537,7 @@ namespace
                         g_targetKilled[g_targetId - 1001] = true;
                     }
 
-                    Print(L"[교전] 표적 " + std::to_wstring(g_targetId) +
+                    Print(L"[교전] 객체 " + std::to_wstring(g_targetId) +
                           L" 격추 처리, 레이저 ON (5초)");
                 }
                 break;
@@ -563,10 +563,10 @@ namespace
         if (request.commandType == static_cast<std::uint32_t>(CommandType::SetRdrElevation))
             line << L", 고각=" << request.targetId << L"도";
         else if (request.targetId != 0)
-            line << L", 표적=" << request.targetId;
+            line << L", 객체=" << request.targetId;
         line << L" -> " << ResultName(response.resultCode)
              << L", 할당 상태=" << AssignmentName(response.assignmentState)
-             << L", 할당 표적=" << response.assignedTargetId
+             << L", 할당 객체=" << response.assignedTargetId
              << (request.commandType == static_cast<std::uint32_t>(CommandType::GetFcsBusy)
                  ? L", FCS busy=" : L", 모의 교전 상태=") << response.fireState;
         Print(line.str());
@@ -630,7 +630,7 @@ namespace
              << L", FCS AZ/EL=" << g_fcsAzimuthDeg << L"/" << g_fcsElevationDeg
              << L"→" << g_fcsTargetAzimuthDeg << L"/" << g_fcsTargetElevationDeg << L"도"
              << L", 할당 상태=" << AssignmentName(static_cast<std::uint32_t>(g_assignment))
-             << L", 표적=" << g_targetId
+             << L", 객체=" << g_targetId
              << L", 모의 교전 상태=" << g_fireState;
         Print(line.str());
     }
@@ -676,7 +676,7 @@ int wmain()
         << L"ECS 통제소 모의 프로그램\n"
         << L"공유 메모리: Local\\ControlStationMock.SharedMemory.v3\n"
         << L"네임드 파이프: \\\\.\\pipe\\ECS_NamedPipe | 프로토콜 버전 2\n"
-        << L"고정 표적: 10개(1001~1010) | 갱신 주기: 100ms | 모터: AZ 25°/s, EL 25°/s\n"
+        << L"고정 객체: 10개(1001~1010) | 갱신 주기: 100ms | 모터: AZ 25°/s, EL 25°/s\n"
         << L"명령어: help, status, connected on|off, available on|off, reset, quit\n";
 
     std::thread shmThread(SharedMemoryLoop);
