@@ -270,11 +270,11 @@ public partial class MainWindow : Window
                 throw new IOException(CommandResultText((ResultCode)response.ResultCode));
 
             _requestedRdrOperating = requestedOperating;
-            AddLog($"감시 자산 {rdr.DisplayName} · {(requestedOperating ? "라이다 구동" : "라이다 정지")} 요청");
+            AddLog($"RDR {rdr.DisplayName} · {(requestedOperating ? "라이다 구동" : "라이다 정지")} 요청");
         }
         catch (Exception ex)
         {
-            ShowAlert($"라이다 상태 변경에 실패했습니다: {ex.Message}", "감시 자산 제어 실패");
+            ShowAlert($"라이다 상태 변경에 실패했습니다: {ex.Message}", "RDR 제어 실패");
         }
         finally
         {
@@ -702,7 +702,7 @@ public partial class MainWindow : Window
         TargetGrid.SelectedItem = target;
         TargetGrid.ScrollIntoView(target);
         DrawRadar();
-        AddLog($"레이더 표적 선택 · {target.DisplayName}");
+        AddLog($"레이더 객체 선택 · {target.DisplayName}");
         e.Handled = true;
     }
 
@@ -750,12 +750,12 @@ public partial class MainWindow : Window
     private void SequenceDeleteSelectedClick(object sender, RoutedEventArgs e)
     {
         if (_sequenceRunning) { ShowAlert("순차 할당 중에는 대기 목록을 삭제할 수 없습니다.", "대기 삭제"); return; }
-        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) { ShowAlert("먼저 대기 목록의 타격자산을 선택하세요.", "대기 삭제"); return; }
+        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) { ShowAlert("먼저 대기 목록의 FCS을 선택하세요.", "대기 삭제"); return; }
         var selectedItems = _sequenceQueue.Where(item => item.FcsId == fcs.Id && item.IsSelected).ToArray();
-        if (selectedItems.Length == 0) { ShowAlert("삭제할 표적을 체크하세요.", "대기 삭제"); return; }
+        if (selectedItems.Length == 0) { ShowAlert("삭제할 객체를 체크하세요.", "대기 삭제"); return; }
         foreach (var item in selectedItems) _sequenceQueue.Remove(item);
         RefreshSequenceQueue();
-        AddLog($"{fcs.DisplayName} 대기 목록에서 {selectedItems.Length}개 표적 삭제");
+        AddLog($"{fcs.DisplayName} 대기 목록에서 {selectedItems.Length}개 객체 삭제");
     }
 
     private void QueueMoveSelectedUpClick(object sender, RoutedEventArgs e) => MoveSelectedQueueItems(-1);
@@ -766,7 +766,7 @@ public partial class MainWindow : Window
         if (_sequenceRunning) return;
         if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) return;
         var visible = _sequenceQueue.Where(item => item.FcsId == fcs.Id).ToList();
-        if (!visible.Any(item => item.IsSelected)) { ShowAlert("순서를 바꿀 표적을 체크하세요.", "대기 목록 순서"); return; }
+        if (!visible.Any(item => item.IsSelected)) { ShowAlert("순서를 바꿀 객체를 체크하세요.", "대기 목록 순서"); return; }
 
         if (direction < 0)
         {
@@ -804,41 +804,41 @@ public partial class MainWindow : Window
     private void TargetQueueToggleClick(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) return;
-        if (_sequenceRunning) { ShowAlert("순차 할당 실행 중에는 대기 목록을 변경할 수 없습니다.", "표적할당 대기 목록"); return; }
+        if (_sequenceRunning) { ShowAlert("순차 할당 실행 중에는 대기 목록을 변경할 수 없습니다.", "객체할당 대기 목록"); return; }
         var queuedItem = _sequenceQueue.FirstOrDefault(item => item.TargetId == target.Id);
         if (queuedItem is not null)
         {
             _sequenceQueue.Remove(queuedItem);
             RefreshSequenceQueue();
-            AddLog($"대기 목록에서 표적 해제 · {target.DisplayName}");
+            AddLog($"대기 목록에서 객체 해제 · {target.DisplayName}");
             return;
         }
         if (!EnsureSharedMemoryLiveForCommand("대기 목록 추가")) return;
         var fcs = _data.FcsAssets.FirstOrDefault(asset => asset.Id == target.SelectedFcsId);
-        if (fcs is null) { ShowAlert($"{target.DisplayName} 행의 타격자산을 먼저 선택하세요.", "표적할당 대기 목록"); return; }
-        if (target.Status != 0) { ShowAlert("생존 상태인 표적만 대기 목록에 넣을 수 있습니다.", "표적할당 대기 목록"); return; }
-        if (_data.Assignments.Any(item => item.TargetId == target.Id)) { ShowAlert($"{target.DisplayName}은(는) 표적 할당 정보에 있습니다. 먼저 할당을 취소하세요.", "중복 등록 차단"); return; }
+        if (fcs is null) { ShowAlert($"{target.DisplayName} 행의 FCS을 먼저 선택하세요.", "객체할당 대기 목록"); return; }
+        if (target.Status != 0) { ShowAlert("생존 상태인 객체만 대기 목록에 넣을 수 있습니다.", "객체할당 대기 목록"); return; }
+        if (_data.Assignments.Any(item => item.TargetId == target.Id)) { ShowAlert($"{target.DisplayName}은(는) 객체 할당 정보에 있습니다. 먼저 할당을 취소하세요.", "중복 등록 차단"); return; }
         var rdr = _data.RdrAssets.FirstOrDefault(asset => asset.Id == target.RdrId);
-        if (rdr is null || !rdr.IsConnected || !rdr.IsOperating) { ShowAlert("라이다가 연결되어 구동 중일 때만 표적을 대기 목록에 넣을 수 있습니다.", "라이다 구동 확인"); return; }
+        if (rdr is null || !rdr.IsConnected || !rdr.IsOperating) { ShowAlert("라이다가 연결되어 구동 중일 때만 객체를 대기 목록에 넣을 수 있습니다.", "라이다 구동 확인"); return; }
         _sequenceQueue.Add(new SequenceQueueItem(target.Id, fcs.Id, target.RdrId));
         RefreshSequenceQueue();
-        AddLog($"대기 목록에 표적 추가 · {target.DisplayName} → {fcs.DisplayName}");
+        AddLog($"대기 목록에 객체 추가 · {target.DisplayName} → {fcs.DisplayName}");
     }
 
     private void AddSelectedTargetsToQueueClick(object sender, RoutedEventArgs e)
     {
-        if (_sequenceRunning) { ShowAlert("순차 할당 진행 중에는 대기 목록을 변경할 수 없습니다.", "표적할당 대기 목록"); return; }
-        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) { ShowAlert("우상단 대기 목록 FCS를 선택하세요.", "표적할당 대기 목록"); return; }
+        if (_sequenceRunning) { ShowAlert("순차 할당 진행 중에는 대기 목록을 변경할 수 없습니다.", "객체할당 대기 목록"); return; }
+        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) { ShowAlert("우상단 대기 목록 FCS를 선택하세요.", "객체할당 대기 목록"); return; }
         if (!EnsureSharedMemoryLiveForCommand("대기 목록 올리기")) return;
         var selectedTargets = _data.Targets.Where(x => x.IsSelected).ToArray();
-        if (selectedTargets.Length == 0) { ShowAlert("표적 목록에서 먼저 표적을 체크하세요.", "표적할당 대기 목록"); return; }
+        if (selectedTargets.Length == 0) { ShowAlert("객체 목록에서 먼저 객체를 체크하세요.", "객체할당 대기 목록"); return; }
         var invalidTargets = new List<string>();
         foreach (var target in selectedTargets)
         {
             var reasons = new List<string>();
             if (target.Status != 0) reasons.Add("생존 상태 아님");
             if (_sequenceQueue.Any(item => item.TargetId == target.Id)) reasons.Add("이미 대기 목록에 등록됨");
-            if (_data.Assignments.Any(item => item.TargetId == target.Id)) reasons.Add("표적 할당 정보에 등록됨");
+            if (_data.Assignments.Any(item => item.TargetId == target.Id)) reasons.Add("객체 할당 정보에 등록됨");
             var rdr = _data.RdrAssets.FirstOrDefault(asset => asset.Id == target.RdrId);
             if (rdr is null || !rdr.IsConnected || !rdr.IsOperating) reasons.Add("라이다 미연결 또는 정지");
             if (reasons.Count > 0) invalidTargets.Add($"{target.DisplayName}: {string.Join(", ", reasons)}");
@@ -846,7 +846,7 @@ public partial class MainWindow : Window
         if (invalidTargets.Count > 0)
         {
             AddLog($"대기 목록 일괄 등록 거부 · 전체 취소 · {string.Join("; ", invalidTargets)}");
-            ShowAlert($"다음 표적을 등록할 수 없어 이번 요청의 표적은 하나도 대기 목록에 추가하지 않았습니다.\n\n{string.Join(Environment.NewLine, invalidTargets)}", "대기 목록 등록 실패");
+            ShowAlert($"다음 객체를 등록할 수 없어 이번 요청의 객체는 하나도 대기 목록에 추가하지 않았습니다.\n\n{string.Join(Environment.NewLine, invalidTargets)}", "대기 목록 등록 실패");
             return;
         }
         foreach (var target in selectedTargets)
@@ -856,24 +856,24 @@ public partial class MainWindow : Window
         }
         SelectAllTargetsCheckBox.IsChecked = false;
         RefreshSequenceQueue();
-        AddLog($"표적할당 대기 목록에 {selectedTargets.Length}개 등록 · {fcs.DisplayName}");
+        AddLog($"객체할당 대기 목록에 {selectedTargets.Length}개 등록 · {fcs.DisplayName}");
     }
 
     private async void SequenceStartClick(object sender, RoutedEventArgs e)
     {
         if (_sequenceRunning) { _stopSequenceRequested = true; SequenceStartButton.IsEnabled = false; return; }
-        if (!EnsureSharedMemoryLiveForCommand("표적 순차 할당")) return;
-        if (QueueFcsSelector.SelectedItem is not FcsAsset selectedQueueFcs) { ShowAlert("순차 할당할 타격자산을 선택하세요.", "표적 순차 할당"); return; }
+        if (!EnsureSharedMemoryLiveForCommand("객체 순차 할당")) return;
+        if (QueueFcsSelector.SelectedItem is not FcsAsset selectedQueueFcs) { ShowAlert("순차 할당할 FCS을 선택하세요.", "객체 순차 할당"); return; }
         var pendingItems = _sequenceQueue.Where(item => item.FcsId == selectedQueueFcs.Id &&
             (item.ResultText == "대기" || item.ResultText.StartsWith("실패", StringComparison.Ordinal) || item.ResultText.StartsWith("중단 ·", StringComparison.Ordinal) || item.ResultText.StartsWith("중지 ·", StringComparison.Ordinal))).ToArray();
-        if (pendingItems.Length == 0) { ShowAlert($"{selectedQueueFcs.DisplayName} 대기 목록에 순차 처리할 표적이 없습니다.", "표적 순차 할당"); return; }
+        if (pendingItems.Length == 0) { ShowAlert($"{selectedQueueFcs.DisplayName} 대기 목록에 순차 처리할 객체가 없습니다.", "객체 순차 할당"); return; }
         foreach (var item in pendingItems) item.ResultText = "대기";
         _sequenceRunning = true;
         QueueFcsSelector.IsEnabled = false;
         UpdateQueueUploadControl();
         _stopSequenceRequested = false;
         SequenceStartButton.Content = "중지 요청";
-        AddLog($"{selectedQueueFcs.DisplayName} 표적 순차 할당 시작 · {pendingItems.Length}개 표적");
+        AddLog($"{selectedQueueFcs.DisplayName} 객체 순차 할당 시작 · {pendingItems.Length}개 객체");
         var sequenceOwnsCurrentAssignment = false;
         var waitForFcs = false;
         SequenceQueueItem? currentSequenceItem = null;
@@ -912,9 +912,9 @@ public partial class MainWindow : Window
                     break;
                 }
 
-                var assigned = await SendPipeCommandAsync(CommandType.AssignTarget, item.RdrId, item.FcsId, item.TargetId, "순차 표적 할당");
+                var assigned = await SendPipeCommandAsync(CommandType.AssignTarget, item.RdrId, item.FcsId, item.TargetId, "순차 객체 할당");
                 if (assigned is null || (ResultCode)assigned.Value.ResultCode != ResultCode.Success)
-                    throw new InvalidOperationException(assigned is null ? "표적 할당 명령을 전송하지 못했습니다." : CommandResultText((ResultCode)assigned.Value.ResultCode));
+                    throw new InvalidOperationException(assigned is null ? "객체 할당 명령을 전송하지 못했습니다." : CommandResultText((ResultCode)assigned.Value.ResultCode));
                 ApplyCommandResponse(assigned.Value);
                 sequenceOwnsCurrentAssignment = true;
                 item.ResultText = "조준 중";
@@ -938,12 +938,12 @@ public partial class MainWindow : Window
                     break;
                 }
 
-                var fired = await SendPipeCommandAsync(CommandType.Fire, item.RdrId, item.FcsId, item.TargetId, "순차 발사");
+                var fired = await SendPipeCommandAsync(CommandType.Fire, item.RdrId, item.FcsId, item.TargetId, "순차 실행");
                 if (fired is null || (ResultCode)fired.Value.ResultCode != ResultCode.Success)
-                    throw new InvalidOperationException(fired is null ? "발사 명령을 전송하지 못했습니다." : CommandResultText((ResultCode)fired.Value.ResultCode));
+                    throw new InvalidOperationException(fired is null ? "실행 명령을 전송하지 못했습니다." : CommandResultText((ResultCode)fired.Value.ResultCode));
                 ApplyCommandResponse(fired.Value);
-                item.ResultText = "발사 중";
-                AddLog($"순차 발사 접수 · {TargetName(item.TargetId)}");
+                item.ResultText = "실행 중";
+                AddLog($"순차 실행 접수 · {TargetName(item.TargetId)}");
 
                 var laserSeenOn = false;
                 var laserWaitStarted = DateTime.UtcNow;
@@ -956,15 +956,15 @@ public partial class MainWindow : Window
                     await Task.Delay(200);
                 } while (true);
                 var canceledAfterFire = await _pipeClient.SendAsync(CommandType.CancelAssignment, 0, item.RdrId, item.FcsId);
-                if ((ResultCode)canceledAfterFire.ResultCode != ResultCode.Success) throw new InvalidOperationException($"{TargetName(item.TargetId)} 발사 후 할당 취소 실패: {CommandResultText((ResultCode)canceledAfterFire.ResultCode)}");
+                if ((ResultCode)canceledAfterFire.ResultCode != ResultCode.Success) throw new InvalidOperationException($"{TargetName(item.TargetId)} 실행 후 할당 취소 실패: {CommandResultText((ResultCode)canceledAfterFire.ResultCode)}");
                 waitForFcs = true;
-                item.ResultText = "완료 · 발사 후 자동 취소";
+                item.ResultText = "완료 · 실행 후 자동 취소";
                 RefreshSequenceQueue();
                 if (!_stopSequenceRequested) AddLog($"순차 처리 완료 · {TargetName(item.TargetId)} · 자동 취소 완료");
             }
-            if (_stopSequenceRequested) AddLog("표적 순차 할당 중지 · 미처리 표적은 대기 목록에 유지");
-            else if (!_sequenceQueue.Any(item => item.FcsId == selectedQueueFcs.Id && item.ResultText == "대기")) AddLog($"{selectedQueueFcs.DisplayName} 표적 순차 할당 완료");
-            else AddLog("표적 순차 할당 중지 · 미처리 표적은 대기 목록에 유지");
+            if (_stopSequenceRequested) AddLog("객체 순차 할당 중지 · 미처리 객체는 대기 목록에 유지");
+            else if (!_sequenceQueue.Any(item => item.FcsId == selectedQueueFcs.Id && item.ResultText == "대기")) AddLog($"{selectedQueueFcs.DisplayName} 객체 순차 할당 완료");
+            else AddLog("객체 순차 할당 중지 · 미처리 객체는 대기 목록에 유지");
         }
         catch (Exception ex)
         {
@@ -977,15 +977,15 @@ public partial class MainWindow : Window
                 }
                 active.ResultText = $"중단 · {ex.Message}";
             }
-            AddLog($"순차 발사 중단 · {ex.Message}");
-            ShowAlert(ex.Message, "순차 발사 중단");
+            AddLog($"순차 실행 중단 · {ex.Message}");
+            ShowAlert(ex.Message, "순차 실행 중단");
         }
         finally
         {
             _sequenceRunning = false;
             _stopSequenceRequested = false;
             QueueFcsSelector.IsEnabled = true;
-            SequenceStartButton.Content = "표적 순차 할당";
+            SequenceStartButton.Content = "객체 순차 할당";
             SequenceStartButton.IsEnabled = true;
             RefreshSequenceQueue();
             UpdateQueueUploadControl();
@@ -1023,43 +1023,43 @@ public partial class MainWindow : Window
 
     private async void TargetAssignClick(object sender, RoutedEventArgs e)
     {
-        if (!EnsureSharedMemoryLiveForCommand("표적 할당")) return;
-        if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("표적 할당 거부 · 표적 행을 확인할 수 없음"); return; }
-        AddLog($"표적 할당 버튼 클릭 · {target.DisplayName}");
+        if (!EnsureSharedMemoryLiveForCommand("객체 할당")) return;
+        if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("객체 할당 거부 · 객체 행을 확인할 수 없음"); return; }
+        AddLog($"객체 할당 버튼 클릭 · {target.DisplayName}");
         if (_sequenceQueue.Any(item => item.TargetId == target.Id))
         {
-            AddLog($"표적 할당 거부 · {target.DisplayName} 대기 목록 등록 중");
-            ShowAlert($"{target.DisplayName}은(는) 표적할당 대기 목록에 등록되어 있습니다. 대기 목록에서 해제한 뒤 직접 할당하세요.", "대기 목록 등록 표적");
+            AddLog($"객체 할당 거부 · {target.DisplayName} 대기 목록 등록 중");
+            ShowAlert($"{target.DisplayName}은(는) 객체할당 대기 목록에 등록되어 있습니다. 대기 목록에서 해제한 뒤 직접 할당하세요.", "대기 목록 등록 객체");
             return;
         }
         var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == target.SelectedFcsId);
         if (fcs is null)
         {
-            AddLog($"표적 할당 거부 · {target.DisplayName} 타격자산 미선택");
-            ShowAlert("타격자산을 먼저 선택하세요.", "표적 할당");
+            AddLog($"객체 할당 거부 · {target.DisplayName} FCS 미선택");
+            ShowAlert("FCS을 먼저 선택하세요.", "객체 할당");
             return;
         }
         if (target.Status != 0)
         {
-            AddLog($"표적 할당 거부 · {target.DisplayName} 상태 {target.StatusText}");
-            ShowAlert("생존 상태인 표적만 할당할 수 있습니다.", "표적 할당");
+            AddLog($"객체 할당 거부 · {target.DisplayName} 상태 {target.StatusText}");
+            ShowAlert("생존 상태인 객체만 할당할 수 있습니다.", "객체 할당");
             return;
         }
         var occupiedAssignment = _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id && x.TargetId != target.Id && x.IsActiveCommandState);
         if (occupiedAssignment is not null)
         {
-            AddLog($"표적 할당 거부 · {fcs.DisplayName} 이미 {occupiedAssignment.TargetName}에 할당됨");
-            ShowAlert($"{fcs.DisplayName}은(는) 이미 {occupiedAssignment.TargetName}에 할당된 타격자산입니다.\n기존 할당을 취소한 뒤 다시 시도하세요.", "이미 할당된 타격자산");
+            AddLog($"객체 할당 거부 · {fcs.DisplayName} 이미 {occupiedAssignment.TargetName}에 할당됨");
+            ShowAlert($"{fcs.DisplayName}은(는) 이미 {occupiedAssignment.TargetName}에 할당된 FCS입니다.\n기존 할당을 취소한 뒤 다시 시도하세요.", "이미 할당된 FCS");
             return;
         }
         if (_pendingFcsAssignments.Contains(fcs.Id))
         {
-            AddLog($"표적 할당 중복 클릭 무시 · {fcs.DisplayName} 연결 시도 중");
+            AddLog($"객체 할당 중복 클릭 무시 · {fcs.DisplayName} 연결 시도 중");
             return;
         }
         if (_assignmentsByTarget.TryGetValue(target.Id, out var currentAssignment) && currentAssignment.FcsId == fcs.Id && !currentAssignment.CanRetry)
         {
-            AddLog($"표적 할당 거부 · {target.DisplayName}에 {fcs.DisplayName} 이미 할당됨");
+            AddLog($"객체 할당 거부 · {target.DisplayName}에 {fcs.DisplayName} 이미 할당됨");
             ShowAlert($"{fcs.DisplayName}은(는) 이미 {target.DisplayName}에 할당되어 있습니다.", "중복 할당");
             return;
         }
@@ -1067,8 +1067,8 @@ public partial class MainWindow : Window
         var rdr = _data.RdrAssets.FirstOrDefault(x => x.Id == target.RdrId);
         if (rdr is null || !rdr.IsConnected || !rdr.IsOperating)
         {
-            AddLog($"표적 할당 거부 · {target.DisplayName} 탐지 레이더 연결/구동 불가");
-            ShowAlert("탐지 레이더의 연결 및 구동 상태를 확인하세요.", "표적 할당");
+            AddLog($"객체 할당 거부 · {target.DisplayName} 탐지 레이더 연결/구동 불가");
+            ShowAlert("탐지 레이더의 연결 및 구동 상태를 확인하세요.", "객체 할당");
             return;
         }
 
@@ -1086,7 +1086,7 @@ public partial class MainWindow : Window
         AddLog($"{target.DisplayName} → {fcs.DisplayName} 명령 파이프 연결 시도 중");
 
         PipeResponse? response;
-        try { response = await SendPipeCommandAsync(CommandType.AssignTarget, target.RdrId, fcs.Id, target.Id, "표적 할당", showConnectionAlert: false); }
+        try { response = await SendPipeCommandAsync(CommandType.AssignTarget, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false); }
         finally
         {
             _pendingFcsAssignments.Remove(fcs.Id);
@@ -1100,7 +1100,7 @@ public partial class MainWindow : Window
             target.IsAssignmentPending = false;
             if (assignment is not null) _data.Assignments.Remove(assignment);
             RefreshAssignments();
-            AddLog($"{target.DisplayName} 표적 할당 실패 · 연결 불가, 할당 정보 제거");
+            AddLog($"{target.DisplayName} 객체 할당 실패 · 연결 불가, 할당 정보 제거");
             return;
         }
         ApplyCommandResponse(response.Value);
@@ -1113,62 +1113,62 @@ public partial class MainWindow : Window
                 RefreshAssignmentEmptyState();
             }
             var message = CommandResultText((ResultCode)response.Value.ResultCode);
-            AddLog($"표적 할당 거부 · {target.DisplayName} · {message}");
-            ShowAlert(message, "표적 할당 거부");
+            AddLog($"객체 할당 거부 · {target.DisplayName} · {message}");
+            ShowAlert(message, "객체 할당 거부");
             return;
         }
-        AddLog($"표적 할당 명령 접수 · {target.DisplayName} → {fcs.DisplayName} · {AssignmentStateText((AssignmentState)response.Value.AssignmentState)}");
+        AddLog($"객체 할당 명령 접수 · {target.DisplayName} → {fcs.DisplayName} · {AssignmentStateText((AssignmentState)response.Value.AssignmentState)}");
     }
 
     private async void CancelAssignmentClick(object sender, RoutedEventArgs e)
     {
-        if (!EnsureSharedMemoryLiveForCommand("표적 할당 취소")) return;
-        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("표적 할당 취소 거부 · 할당 행을 확인할 수 없음"); return; }
-        AddLog($"표적 할당 취소 버튼 클릭 · {assignment.TargetName}");
+        if (!EnsureSharedMemoryLiveForCommand("객체 할당 취소")) return;
+        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("객체 할당 취소 거부 · 할당 행을 확인할 수 없음"); return; }
+        AddLog($"객체 할당 취소 버튼 클릭 · {assignment.TargetName}");
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
         uint rdrId = target?.RdrId ?? 1;
-        var response = await SendPipeCommandAsync(CommandType.CancelAssignment, rdrId, assignment.FcsId, assignment.TargetId, "표적 할당 취소");
+        var response = await SendPipeCommandAsync(CommandType.CancelAssignment, rdrId, assignment.FcsId, assignment.TargetId, "객체 할당 취소");
         if (response is null) return;
         ApplyCommandResponse(response.Value);
         if ((ResultCode)response.Value.ResultCode != ResultCode.Success)
         {
             var message = CommandResultText((ResultCode)response.Value.ResultCode);
-            AddLog($"표적 할당 취소 거부 · {assignment.TargetName} · {message}");
-            ShowAlert(message, "표적 할당 취소 거부");
+            AddLog($"객체 할당 취소 거부 · {assignment.TargetName} · {message}");
+            ShowAlert(message, "객체 할당 취소 거부");
             return;
         }
-        AddLog($"표적 할당 취소 명령 접수 · {assignment.TargetName}");
+        AddLog($"객체 할당 취소 명령 접수 · {assignment.TargetName}");
     }
 
     private async void FireAssignmentClick(object sender, RoutedEventArgs e)
     {
-        if (!EnsureSharedMemoryLiveForCommand("발사")) return;
-        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("발사 거부 · 할당 행을 확인할 수 없음"); return; }
-        AddLog($"발사 버튼 클릭 · {assignment.TargetName}");
+        if (!EnsureSharedMemoryLiveForCommand("실행")) return;
+        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("실행 거부 · 할당 행을 확인할 수 없음"); return; }
+        AddLog($"실행 버튼 클릭 · {assignment.TargetName}");
         var targetName = assignment.TargetName;
         var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
         var unmetConditions = new List<string>();
         if (!assignment.CanFire) unmetConditions.Add($"현재 할당 상태: {assignment.StateText} (할당 완료 필요)");
-        if (fcs is null) unmetConditions.Add("타격자산 데이터를 확인할 수 없습니다");
+        if (fcs is null) unmetConditions.Add("FCS 데이터를 확인할 수 없습니다");
         if (unmetConditions.Count > 0)
         {
-            AddLog($"발사 거부 · {targetName} · {string.Join(", ", unmetConditions)}");
-            ShowAlert(string.Join(Environment.NewLine, unmetConditions), "발사 조건 미충족");
+            AddLog($"실행 거부 · {targetName} · {string.Join(", ", unmetConditions)}");
+            ShowAlert(string.Join(Environment.NewLine, unmetConditions), "실행 조건 미충족");
             return;
         }
         if (fcs is null) return;
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
-        var response = await SendPipeCommandAsync(CommandType.Fire, target?.RdrId ?? 1, assignment.FcsId, assignment.TargetId, "발사");
+        var response = await SendPipeCommandAsync(CommandType.Fire, target?.RdrId ?? 1, assignment.FcsId, assignment.TargetId, "실행");
         if (response is null) return;
         ApplyCommandResponse(response.Value);
         if ((ResultCode)response.Value.ResultCode != ResultCode.Success)
         {
             var message = CommandResultText((ResultCode)response.Value.ResultCode);
-            AddLog($"발사 거부 · {targetName} · {message}");
-            ShowAlert(message, "발사 거부");
+            AddLog($"실행 거부 · {targetName} · {message}");
+            ShowAlert(message, "실행 거부");
             return;
         }
-        AddLog($"발사 명령 응답 · {targetName} → {fcs.DisplayName} · {(response.Value.FireState == 1 ? "발사 완료" : "발사 접수")}");
+        AddLog($"실행 명령 응답 · {targetName} → {fcs.DisplayName} · {(response.Value.FireState == 1 ? "실행 완료" : "실행 접수")}");
     }
 
     private void ShowAlert(string message, string title) =>
@@ -1265,7 +1265,7 @@ public partial class MainWindow : Window
 
         if (_previousAssignmentState != state)
         {
-            AddLog($"명령 서버 표적할당 상태 · {AssignmentStateText(state)} · {TargetName(response.AssignedTargetId)}");
+            AddLog($"명령 서버 객체할당 상태 · {AssignmentStateText(state)} · {TargetName(response.AssignedTargetId)}");
             _previousAssignmentState = state;
         }
         RefreshAssignments();
@@ -1276,7 +1276,7 @@ public partial class MainWindow : Window
     private static string AssignmentStateText(AssignmentState state) => state switch
     {
         AssignmentState.Idle => "대기",
-        AssignmentState.Adjusting => "타격자산 조준 중",
+        AssignmentState.Adjusting => "FCS 조준 중",
         AssignmentState.Assigned => "할당 완료",
         AssignmentState.Failed => "할당 실패",
         _ => "알 수 없음"
@@ -1286,9 +1286,9 @@ public partial class MainWindow : Window
     {
         ResultCode.Success => "명령 접수",
         ResultCode.InvalidRequest => "요청 값이 올바르지 않습니다",
-        ResultCode.AssetUnavailable => "타격자산을 사용할 수 없습니다",
-        ResultCode.NotAssigned => "타격자산에 할당된 표적이 없습니다",
-        ResultCode.AlreadyAssigned => "타격자산에 이미 다른 표적이 할당되어 있습니다",
+        ResultCode.AssetUnavailable => "FCS을 사용할 수 없습니다",
+        ResultCode.NotAssigned => "FCS에 할당된 객체가 없습니다",
+        ResultCode.AlreadyAssigned => "FCS에 이미 다른 객체가 할당되어 있습니다",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
@@ -1408,9 +1408,9 @@ public sealed class SequenceQueueItem : INotifyPropertyChanged
         "대기" or FcsBusyWait => "대기",
         "할당 요청" => "할당",
         "조준 중" => "조준",
-        "발사 중" => "발사",
+        "실행 중" => "실행",
         "중지 · 할당 취소" => "중지",
-        "완료 · 발사 후 자동 취소" => "완료",
+        "완료 · 실행 후 자동 취소" => "완료",
         _ => "실패"
     };
     public string OrderText { get => _orderText; set { if (_orderText == value) return; _orderText = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OrderText))); } }
@@ -1516,17 +1516,17 @@ public sealed class AssignmentView : INotifyPropertyChanged
     {
         if (_connectionPending) { StateText = "연결 시도 중"; return; }
         if (_connectionFailed) { StateText = "연결 실패 · 재시도 가능"; return; }
-        if (_fireState != 0) { StateText = "발사 완료"; return; }
-        if (target?.Status == 1) { StateText = "발사 완료"; return; }
-        if (fcs is null) { StateText = "타격자산 데이터 대기"; return; }
-        if (!fcs.IsEnabled) { StateText = "타격자산 사용 불가"; return; }
-        if (!fcs.IsOperating) { StateText = "타격자산 정지"; return; }
-        if (!fcs.IsConnected) { StateText = "타격자산 연결 대기"; return; }
+        if (_fireState != 0) { StateText = "실행 완료"; return; }
+        if (target?.Status == 1) { StateText = "실행 완료"; return; }
+        if (fcs is null) { StateText = "FCS 데이터 대기"; return; }
+        if (!fcs.IsEnabled) { StateText = "FCS 사용 불가"; return; }
+        if (!fcs.IsOperating) { StateText = "FCS 정지"; return; }
+        if (!fcs.IsConnected) { StateText = "FCS 연결 대기"; return; }
         if (_commandState is null) { StateText = "명령 파이프 대기"; return; }
         StateText = _commandState.Value switch
         {
             AssignmentState.Idle => "명령 대기",
-            AssignmentState.Adjusting => "타격자산 조준 중",
+            AssignmentState.Adjusting => "FCS 조준 중",
             AssignmentState.Assigned => "할당 완료",
             AssignmentState.Failed => "할당 실패",
             _ => "상태 확인 불가"

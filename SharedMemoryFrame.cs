@@ -14,7 +14,7 @@ public static class SharedMemoryProtocol
     // 프레임 식별값과 데이터 구조 버전
     public const uint Magic = 0x314D4354;
     public const uint Version = 3;
-    // 프레임에 담을 자산 및 표적 최대 개수
+    // 프레임에 담을 자산 및 객체 최대 개수
     public const int RdrCapacity = 1;
     public const int FcsCapacity = 1;
     public const int TargetCapacity = 10;
@@ -56,24 +56,24 @@ public struct SharedFcsAsset
     public float positionZ;       // FCS의 Z 위치(미터)
 }
 
-/// <summary>탐지된 표적의 방향, 좌표, 상태를 담는 공유 구조체</summary>
+/// <summary>탐지된 객체의 방향, 좌표, 상태를 담는 공유 구조체</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedTarget
 {
-    public uint targetId;          // 표적 고유 번호
-    public float azimuthDeg;       // RDR 기준 표적 방위각(도)
-    public float elevationDeg;     // 표적 고각(도)
-    public float distanceM;        // RDR 기준 표적 거리(미터)
-    public float lidarX;           // 공통 평면 좌표계에서 표적의 X 위치(미터)
-    public float lidarY;           // 공통 평면 좌표계에서 표적의 Y 위치(미터)
-    public float lidarZ;           // 라이다 좌표계에서 표적의 Z 위치(미터)
-    public uint rdrId;             // 표적을 감지한 RDR 자산 번호
+    public uint targetId;          // 객체 고유 번호
+    public float azimuthDeg;       // RDR 기준 객체 방위각(도)
+    public float elevationDeg;     // 객체 고각(도)
+    public float distanceM;        // RDR 기준 객체 거리(미터)
+    public float lidarX;           // 공통 평면 좌표계에서 객체의 X 위치(미터)
+    public float lidarY;           // 공통 평면 좌표계에서 객체의 Y 위치(미터)
+    public float lidarZ;           // 라이다 좌표계에서 객체의 Z 위치(미터)
+    public uint rdrId;             // 객체를 감지한 RDR 자산 번호
     public byte status;            // 상태: 0=생존, 1=격추, 2=미검출
-    public byte valid;             // 슬롯 사용 여부: 0=미사용, 1=유효한 표적
+    public byte valid;             // 슬롯 사용 여부: 0=미사용, 1=유효한 객체
     public ushort reserved;        // 정렬과 향후 확장을 위한 예약값, 현재 0
 }
 
-/// <summary>RDR·FCS 자산과 표적 목록을 담는 프레임 페이로드</summary>
+/// <summary>RDR·FCS 자산과 객체 목록을 담는 프레임 페이로드</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 public struct SharedPayload
 {
@@ -87,8 +87,8 @@ public struct SharedPayload
     public uint fcsCount;          // 실제 등록된 FCS 수
     public uint selectedRdrId;     // GUI에서 선택한 RDR ID, 0은 선택 없음
     public uint selectedFcsId;     // GUI에서 선택한 FCS ID, 0은 선택 없음
-    public uint targetCount;       // 현재 등록된 표적 수
-    // 고정 크기 표적 배열
+    public uint targetCount;       // 현재 등록된 객체 수
+    // 고정 크기 객체 배열
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = SharedMemoryProtocol.TargetCapacity)]
     public SharedTarget[] targets;
 }
@@ -111,7 +111,7 @@ public struct SharedFrameHeader
 public struct SharedFrame
 {
     public SharedFrameHeader header; // 프레임 메타데이터
-    public SharedPayload payload;    // 자산 상태와 표적 정보
+    public SharedPayload payload;    // 자산 상태와 객체 정보
 }
 
 /// <summary>Read-only poller for the C++ named shared-memory frame.</summary>
