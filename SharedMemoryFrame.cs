@@ -68,8 +68,8 @@ public struct SharedTarget
     public float lidarY;           // 공통 평면 좌표계에서 객체의 Y 위치(미터)
     public float lidarZ;           // 라이다 좌표계에서 객체의 Z 위치(미터)
     public uint rdrId;             // 객체를 감지한 RDR 자산 번호
-    public byte status;            // 상태: 0=생존, 1=격추, 2=미검출
-    public byte valid;             // 슬롯 사용 여부: 0=미사용, 1=유효한 객체
+    public byte status;            // 상태: 기존 0–3 유지, 4=관측 일시중지, 5=재관측 대기 (valid=0)
+    public byte valid;             // 최신 좌표 유효 여부. status 4/5 + valid 0은 표시 전용 마지막 위치
     public ushort reserved;        // 정렬과 향후 확장을 위한 예약값, 현재 0
 }
 
