@@ -14,3 +14,4 @@ obj/
 # Visual Studio user-specific files
 *.suo
 *.user
+artifacts/

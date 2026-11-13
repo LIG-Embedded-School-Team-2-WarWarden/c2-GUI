@@ -1,0 +1,13 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="Panel" Color="#0A1413"/><SolidColorBrush x:Key="Line" Color="#1B3831"/>
+    <SolidColorBrush x:Key="Green" Color="#00E68A"/><SolidColorBrush x:Key="Muted" Color="#52796D"/>
+    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#C3D6CE"/><Setter Property="FontFamily" Value="Consolas"/></Style>
+    <Style TargetType="DataGridColumnHeader"><Setter Property="Background" Value="#0D1C19"/><Setter Property="Foreground" Value="#6C9887"/><Setter Property="Padding" Value="8"/><Setter Property="BorderBrush" Value="#1B3831"/></Style>
+    <Style x:Key="QueueCenteredHeader" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}"><Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="VerticalContentAlignment" Value="Center"/></Style>
+    <Style x:Key="QueueCenteredText" TargetType="TextBlock"><Setter Property="HorizontalAlignment" Value="Center"/><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextAlignment" Value="Center"/></Style>
+    <Style TargetType="DataGridRow"><Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="#C3D6CE"/><Setter Property="BorderBrush" Value="#193A2E"/><Style.Triggers><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="#B7F7D8"/><Setter Property="Foreground" Value="#07100F"/></Trigger></Style.Triggers></Style>
+    <Style TargetType="ComboBox"><Setter Property="Background" Value="#B7F7D8"/><Setter Property="Foreground" Value="#071B33"/><Setter Property="BorderBrush" Value="#1B5842"/><Setter Property="Padding" Value="5,3"/></Style>
+    <Style TargetType="Button"><Setter Property="Background" Value="#08251B"/><Setter Property="Foreground" Value="#00E68A"/><Setter Property="BorderBrush" Value="#1B5842"/><Setter Property="Padding" Value="8,4"/></Style>
+    <Style x:Key="FieldCard" TargetType="Border"><Setter Property="BorderBrush" Value="#1B3831"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Background" Value="#0A1413"/><Setter Property="Padding" Value="9"/><Setter Property="Margin" Value="3"/></Style>
+
+</ResourceDictionary>

@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 
@@ -14,6 +14,9 @@ internal enum CommandType : uint
     SetRdrElevation = 4,    // RDR 고각 설정, TargetId는 0.1도 단위
     SetAssetPosition = 5,   // 자산 좌표 설정, X/Y/Z는 미터 단위
     SetRdrOperating = 6,    // RDR 동작 상태 설정, TargetId: 0=비활성, 1=작동
+    GetRdrStartupStatus = 18,
+    GetCameraSettings = 8,
+    SetCameraSettings = 9,
     GetFcsBusy = 7         // 성공 응답의 FireState는 FCS busy 상태
 }
 
@@ -28,7 +31,16 @@ internal enum ResultCode : uint
     NotSupported = 5,    // 지원하지 않는 명령 종류
     DeviceError = 6,     // 모의 장치 처리 중 오류 발생
     StatusPending = 7,   // 확장 응답에서 새 상태를 기다리는 중
-    DeviceFault = 10     // 확장 응답에서 장비가 준비되지 않음
+    DeviceFault = 10,    // 확장 응답에서 장비가 준비되지 않음
+    LidarUnsupported = 15,
+    LidarUnknown = 16,
+    LidarRecoveryRequired = 17,
+    LidarStopUnconfirmed = 18,
+    LidarDisconnected = 19,
+    LidarBusy = 20,
+    LidarResumeUnconfirmed = 21,
+    FcsOffUnconfirmed = 22,
+    RdrStartUnconfirmed = 23
 }
 
 /// <summary>FCS의 객체 할당 진행 상태</summary>
