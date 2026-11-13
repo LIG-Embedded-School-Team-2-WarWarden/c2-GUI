@@ -110,7 +110,7 @@ public partial class MainWindow : Window
             .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.positionZ, x.fieldOfViewDeg)).ToArray();
         var fcs = payload.fcsAssets.Take((int)payload.fcsCount)
             .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.positionZ)).ToArray();
-        var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1)
+        var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1 || (x.valid == 0 && x.status is 4 or 5))
             .Select(x => new TargetRecord(x.targetId, x.azimuthDeg, x.elevationDeg, x.distanceM, x.lidarX, x.lidarY, x.lidarZ, x.rdrId, x.status, x.valid == 1,
                 _targetFcsSelections.TryGetValue(x.targetId, out var selectedFcsId) ? selectedFcsId : payload.selectedFcsId,
                 _assignedTargets.Contains(x.targetId))).ToArray();
@@ -555,7 +555,7 @@ public partial class MainWindow : Window
         if (rdr is null) return;
 
         var fcs = FcsSelector.SelectedItem as FcsAsset;
-        var targets = _data.Targets.Where(x => x.Valid != 0 && x.RdrId == rdr.Id).ToArray();
+        var targets = _data.Targets.Where(x => (x.Valid != 0 || x.IsObservationWaiting) && x.RdrId == rdr.Id).ToArray();
         var minX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Min();
         var maxX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Max();
         var minY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Min();
@@ -663,7 +663,7 @@ public partial class MainWindow : Window
         {
             var point = Map(target.LidarX, target.LidarY);
             var isSelected = _selectedTargetId == target.Id;
-            var color = isSelected ? Color.FromRgb(0, 162, 255) : target.Status == 1 ? Color.FromRgb(110, 120, 120) : target.Status == 2 ? Color.FromRgb(255, 176, 0) : Color.FromRgb(255, 65, 82);
+            var color = target.IsObservationWaiting ? Color.FromRgb(150, 160, 165) : isSelected ? Color.FromRgb(0, 162, 255) : target.Status == 1 ? Color.FromRgb(110, 120, 120) : target.Status == 2 ? Color.FromRgb(255, 176, 0) : Color.FromRgb(255, 65, 82);
             var marker = new Polygon
             {
                 Fill = new SolidColorBrush(color),
@@ -671,7 +671,8 @@ public partial class MainWindow : Window
                 StrokeThickness = isSelected ? 1.5 : 0.7,
                 Cursor = Cursors.Hand,
                 Tag = target.Id,
-                ToolTip = target.DisplayName
+                ToolTip = $"{target.DisplayName} · {target.StatusText}",
+                Opacity = target.IsObservationWaiting ? 0.45 : 1
             };
             marker.Points.Add(new Point(point.X, point.Y - 6)); marker.Points.Add(new Point(point.X - 5, point.Y + 4)); marker.Points.Add(new Point(point.X + 5, point.Y + 4));
             marker.MouseLeftButtonDown += RadarTargetMouseLeftButtonDown;
@@ -816,7 +817,7 @@ public partial class MainWindow : Window
         if (!EnsureSharedMemoryLiveForCommand("대기 목록 추가")) return;
         var fcs = _data.FcsAssets.FirstOrDefault(asset => asset.Id == target.SelectedFcsId);
         if (fcs is null) { ShowAlert($"{target.DisplayName} 행의 FCS을 먼저 선택하세요.", "객체할당 대기 목록"); return; }
-        if (target.Status != 0) { ShowAlert("생존 상태인 객체만 대기 목록에 넣을 수 있습니다.", "객체할당 대기 목록"); return; }
+        if (!target.CanAssign) { ShowAlert("생존 상태인 객체만 대기 목록에 넣을 수 있습니다.", "객체할당 대기 목록"); return; }
         if (_data.Assignments.Any(item => item.TargetId == target.Id)) { ShowAlert($"{target.DisplayName}은(는) 객체 할당 정보에 있습니다. 먼저 할당을 취소하세요.", "중복 등록 차단"); return; }
         var rdr = _data.RdrAssets.FirstOrDefault(asset => asset.Id == target.RdrId);
         if (rdr is null || !rdr.IsConnected || !rdr.IsOperating) { ShowAlert("라이다가 연결되어 구동 중일 때만 객체를 대기 목록에 넣을 수 있습니다.", "라이다 구동 확인"); return; }
@@ -836,7 +837,7 @@ public partial class MainWindow : Window
         foreach (var target in selectedTargets)
         {
             var reasons = new List<string>();
-            if (target.Status != 0) reasons.Add("생존 상태 아님");
+            if (!target.CanAssign) reasons.Add("생존 상태 아님");
             if (_sequenceQueue.Any(item => item.TargetId == target.Id)) reasons.Add("이미 대기 목록에 등록됨");
             if (_data.Assignments.Any(item => item.TargetId == target.Id)) reasons.Add("객체 할당 정보에 등록됨");
             var rdr = _data.RdrAssets.FirstOrDefault(asset => asset.Id == target.RdrId);
@@ -898,8 +899,16 @@ public partial class MainWindow : Window
                 RefreshSequenceQueue();
                 var target = _data.Targets.FirstOrDefault(x => x.Id == item.TargetId);
                 var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == item.FcsId);
+                var reacquireWait = Stopwatch.StartNew();
+                while (target?.IsObservationWaiting == true && !_stopSequenceRequested && reacquireWait.Elapsed < TimeSpan.FromSeconds(13))
+                {
+                    item.ResultText = target.StatusText;
+                    await Task.Delay(100);
+                    target = _data.Targets.FirstOrDefault(x => x.Id == item.TargetId);
+                }
+                if (_stopSequenceRequested) { item.ResultText = "대기"; break; }
                 var rdr = _data.RdrAssets.FirstOrDefault(x => x.Id == item.RdrId);
-                if (target is null || target.Status != 0 || fcs is null || !fcs.IsConnected || !fcs.IsEnabled || !fcs.IsOperating || rdr is null || !rdr.IsConnected || !rdr.IsOperating)
+                if (target is null || !target.CanAssign || fcs is null || !fcs.IsConnected || !fcs.IsEnabled || !fcs.IsOperating || rdr is null || !rdr.IsConnected || !rdr.IsOperating)
                     throw new InvalidOperationException($"{TargetName(item.TargetId)} 또는 할당 자산의 연결/구동 상태를 확인하세요.");
 
                 var status = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: item.RdrId, fcsId: item.FcsId);
@@ -1039,7 +1048,7 @@ public partial class MainWindow : Window
             ShowAlert("FCS을 먼저 선택하세요.", "객체 할당");
             return;
         }
-        if (target.Status != 0)
+        if (!target.CanAssign)
         {
             AddLog($"객체 할당 거부 · {target.DisplayName} 상태 {target.StatusText}");
             ShowAlert("생존 상태인 객체만 할당할 수 있습니다.", "객체 할당");
@@ -1148,6 +1157,7 @@ public partial class MainWindow : Window
         var targetName = assignment.TargetName;
         var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
         var unmetConditions = new List<string>();
+        if (_data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId)?.CanAssign != true) unmetConditions.Add("최신 재관측 확인이 필요합니다");
         if (!assignment.CanFire) unmetConditions.Add($"현재 할당 상태: {assignment.StateText} (할당 완료 필요)");
         if (fcs is null) unmetConditions.Add("FCS 데이터를 확인할 수 없습니다");
         if (unmetConditions.Count > 0)
@@ -1508,7 +1518,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         LidarYText = $"{target.LidarY:0.00}";
         LidarZText = $"{target.LidarZ:0.00}";
         RdrIdText = target.RdrId.ToString();
-        TargetStatusText = target.Status switch { 0 => "ALIVE", 1 => "HIT", 2 => "MISSING", _ => "UNKNOWN" };
+        TargetStatusText = target.StatusText;
         RefreshStateText(target, fcs);
     }
 
@@ -1516,6 +1526,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     {
         if (_connectionPending) { StateText = "연결 시도 중"; return; }
         if (_connectionFailed) { StateText = "연결 실패 · 재시도 가능"; return; }
+        if (target?.IsObservationWaiting == true) { StateText = target.StatusText; return; }
         if (_fireState != 0) { StateText = "실행 완료"; return; }
         if (target?.Status == 1) { StateText = "실행 완료"; return; }
         if (fcs is null) { StateText = "FCS 데이터 대기"; return; }
@@ -1622,7 +1633,9 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public string LidarXText => LidarX.ToString("0.00");
     public string LidarYText => LidarY.ToString("0.00");
     public string LidarZText => LidarZ.ToString("0.00");
-    public string StatusText => Status switch { 0 => "ALIVE", 1 => "HIT", 2 => "MISSING", _ => "UNKNOWN" };
+    public bool IsObservationWaiting => Status is 4 or 5;
+    public bool CanAssign => Valid == 1 && Status == 0;
+    public string StatusText => Status switch { 0 => "ALIVE", 1 => "HIT", 2 => "MISSING", 4 => "관측 일시중지", 5 => "재관측 대기", _ => "UNKNOWN" };
     public string ValidText => Valid == 1 ? "YES" : "NO";
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -1639,6 +1652,11 @@ public sealed class TargetRecord : INotifyPropertyChanged
         if (EqualityComparer<T>.Default.Equals(field, value)) return;
         field = value;
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+        if (name is nameof(Status) or nameof(Valid))
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanAssign)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsObservationWaiting)));
+        }
         var computed = name switch
         {
             nameof(AzimuthDeg) => nameof(AzimuthText), nameof(ElevationDeg) => nameof(ElevationText),
