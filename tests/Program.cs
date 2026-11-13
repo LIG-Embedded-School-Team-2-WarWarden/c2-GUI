@@ -48,6 +48,19 @@ static class Checks
             Check(((TargetRecord)grid.Items[0]).Id==8 && !ReferenceEquals(original,grid.Items[0]),"new ID aliased to old object");
             apply.Invoke(window,new object[]{Frame(2,0)});
             Check(grid.Items.Count==0,"ordinary missing target retained");
+            var connection = typeof(MainWindow).GetMethod("ApplyConnectionState",BindingFlags.NonPublic|BindingFlags.Instance)!;
+            var running = typeof(MainWindow).GetField("_sequenceRunning",BindingFlags.NonPublic|BindingFlags.Instance)!;
+            var stopped = typeof(MainWindow).GetField("_stopSequenceRequested",BindingFlags.NonPublic|BindingFlags.Instance)!;
+            var setStatus=typeof(AssignmentView).GetMethod("SetCommandStatus",BindingFlags.NonPublic|BindingFlags.Instance)!;
+            setStatus.Invoke(assignment,new object[]{Enum.Parse(setStatus.GetParameters()[0].ParameterType,"Assigned"),0u});
+            ((DashboardData)window.DataContext).Assignments.Add(assignment);
+            running.SetValue(window,true);
+            FrameFreshnessChecks.Run(s => connection.Invoke(window,new object[]{s}),
+                f => apply.Invoke(window,new object[]{f}), () => grid.Items.Count, () => assignment.CanFire);
+            Check((bool)stopped.GetValue(window)!,"stale frames did not stop sequence");
+            assignment.Refresh(null,null);
+            Check(!assignment.CanFire && assignment.LidarXText=="—","offline assignment remained usable");
+            running.SetValue(window,false);
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
         finally { window.Close(); app.Shutdown(); }

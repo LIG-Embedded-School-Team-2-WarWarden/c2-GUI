@@ -7,3 +7,11 @@ ECS GUI v3의 객체 status=4/valid=0은 관측 일시중지, status=5/valid=0�
 테스트: `dotnet run --project tests/ObservationRetention.csproj -c Release`. 실제 WPF ApplyFrame을 통해 행 유지, 명령 차단, 새 ID 구분, 일반 소실을 검증한다. `RETENTION_RENDER` 환경변수에 PNG 경로를 지정하면 대기 화면을 렌더링한다.
 
 동일 ID의 재관측은 RDR 펌웨어 지원이 필요하다. 상세 요구사항은 [RDR-ECS ICD](https://ligproject2team.atlassian.net/wiki/spaces/MFS/pages/37355617/RDR-ECS+ICD)를 따른다.
+
+## 공유 메모리 갱신 중단
+
+프레임 헤더 시각이 현재 시각에서 2초 이상 벗어나거나 동일 프레임이 단조 시계 기준 2초 이상 유지되면 LIVE를 해제한다. 최초 접속 때 이미 오래된 매핑도 거절한다. 객체 목록·지도 표시와 할당 행의 오래된 좌표를 지우고, 진행 중인 순차 목록은 후속 실행을 중단한다. 명령 파이프 상태가 살아 있어도 오래된 객체 좌표로 명령하지 않는다.
+
+새 프레임이 오면 표시를 복구한다. ECS 재시작으로 같은 sequence를 쓰더라도 새 timestamp이면 수신하며, 일시적인 읽기/체크섬 오류 후 아직 유효한 프레임을 다시 받으면 화면을 재구성한다. 이 복구는 원래 프레임 유효 기한을 늘리지 않는다.
+
+회귀 테스트는 실제 이름 있는 공유 메모리·프레임 리더·WPF 화면을 연결하고 테스트 시계를 사용해 2초 경계, 15초 정지, 오래된 매핑, 재시작, 체크섬 오류 복구, 시스템 시각 정지 조건을 검증한다.

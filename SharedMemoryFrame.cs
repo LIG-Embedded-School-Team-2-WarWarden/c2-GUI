@@ -120,7 +120,11 @@ public sealed class SharedMemoryFrameReader : IDisposable
     private readonly string _name;
     private readonly string _mutexName;
     private readonly Timer _timer;
+    private readonly TimeProvider _time;
+    public const int FrameTimeoutMilliseconds = 2000;
     private uint? _lastSequence;
+    private ulong _lastFrameTimestamp;
+    private long _lastAdvance;
     private string? _lastState;
     private int _reading;
     private bool _disposed;
@@ -128,8 +132,9 @@ public sealed class SharedMemoryFrameReader : IDisposable
     public event Action<SharedFrame>? FrameReceived;
     public event Action<string>? StateChanged;
 
-    public SharedMemoryFrameReader(string? name = null, int pollMilliseconds = 50)
+    public SharedMemoryFrameReader(string? name = null, int pollMilliseconds = 50, TimeProvider? timeProvider = null)
     {
+        _time = timeProvider ?? TimeProvider.System;
         _name = string.IsNullOrWhiteSpace(name)
             ? Environment.GetEnvironmentVariable("AADC9_SHARED_MEMORY_NAME") ?? SharedMemoryProtocol.DefaultName
             : name;
@@ -211,12 +216,29 @@ public sealed class SharedMemoryFrameReader : IDisposable
                 return;
             }
 
-            if (_lastSequence == frame.header.sequence)
+            var ageMs = (double)_time.GetUtcNow().ToUnixTimeMilliseconds() - frame.header.timestampMs;
+            if (Math.Abs(ageMs) >= FrameTimeoutMilliseconds)
             {
+                SetState("프레임 갱신 중단 · 시간 초과");
+                return;
+            }
+            if (_lastSequence == frame.header.sequence && _lastFrameTimestamp == frame.header.timestampMs)
+            {
+                if (_time.GetElapsedTime(_lastAdvance).TotalMilliseconds >= FrameTimeoutMilliseconds)
+                {
+                    SetState("프레임 갱신 중단 · 시간 초과");
+                    return;
+                }
+                var recovering = _lastState?.StartsWith("LIVE", StringComparison.Ordinal) != true;
                 SetState($"LIVE · #{frame.header.sequence}");
+                // A transient read error clears the view. Re-deliver a still
+                // fresh frame on recovery without extending its freshness lease.
+                if (recovering) FrameReceived?.Invoke(frame);
                 return;
             }
             _lastSequence = frame.header.sequence;
+            _lastFrameTimestamp = frame.header.timestampMs;
+            _lastAdvance = _time.GetTimestamp();
             SetState($"LIVE · #{frame.header.sequence}");
             FrameReceived?.Invoke(frame);
             }
