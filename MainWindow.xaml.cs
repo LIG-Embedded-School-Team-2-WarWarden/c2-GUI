@@ -62,29 +62,7 @@ public partial class MainWindow : Window
         LoadPersistentEventLog();
         AddLog($"프로그램 시작 · 로그파일 {_eventLogPath}");
         _frameReader = new SharedMemoryFrameReader();
-        _frameReader.StateChanged += state => Dispatcher.BeginInvoke(() =>
-        {
-            var isLive = state.StartsWith("LIVE", StringComparison.Ordinal);
-            if (_previousConnectionState != isLive)
-            {
-                if (isLive)
-                    AddLog(_previousConnectionState == false ? "공유 메모리 연결 시작 · 재연결" : "공유 메모리 연결 시작");
-                else if (_previousConnectionState == true)
-                    AddLog($"공유 메모리 연결 중단 · {state}");
-                _previousConnectionState = isLive;
-            }
-            _isSharedMemoryLive = isLive;
-            UpdateQueueUploadControl();
-            UpdateRdrElevationControl(RdrSelector.SelectedItem as RdrAsset);
-            UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset);
-            SharedMemoryStatus.Text = state;
-            SharedMemoryStatus.Foreground = isLive
-                ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
-                : new SolidColorBrush(Color.FromRgb(255, 176, 0));
-            RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
-            RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
-            RefreshAssignments();
-        });
+        _frameReader.StateChanged += state => Dispatcher.BeginInvoke(() => ApplyConnectionState(state));
         _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
         Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
         Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
@@ -95,6 +73,38 @@ public partial class MainWindow : Window
             _rdrElevationSendTimer.Stop();
             await SendRdrElevationCommandAsync();
         };
+    }
+
+    private void ApplyConnectionState(string state)
+    {
+        var isLive = state.StartsWith("LIVE", StringComparison.Ordinal);
+        if (_previousConnectionState != isLive)
+        {
+            if (isLive)
+                AddLog(_previousConnectionState == false ? "공유 메모리 연결 시작 · 재연결" : "공유 메모리 연결 시작");
+            else if (_previousConnectionState == true)
+                AddLog($"공유 메모리 연결 중단 · {state}");
+            _previousConnectionState = isLive;
+        }
+        _isSharedMemoryLive = isLive;
+        if (!isLive)
+        {
+            _data.Targets.Clear();
+            _selectedTargetId = null;
+            if (_sequenceRunning) _stopSequenceRequested = true;
+            TargetCountText.Text = $"0 / {SharedMemoryProtocol.TargetCapacity}";
+            DrawRadar();
+        }
+        UpdateQueueUploadControl();
+        UpdateRdrElevationControl(RdrSelector.SelectedItem as RdrAsset);
+        UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset);
+        SharedMemoryStatus.Text = state;
+        SharedMemoryStatus.Foreground = isLive
+            ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
+            : new SolidColorBrush(Color.FromRgb(255, 176, 0));
+        RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
+        RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
+        RefreshAssignments();
     }
 
     private void ApplyFrame(SharedFrame frame)
@@ -1391,7 +1401,7 @@ public partial class MainWindow : Window
         {
             var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
             var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
-            assignment.Refresh(target, fcs);
+            assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null);
         }
         RefreshAssignmentEmptyState();
         UpdateQueueUploadControl();
@@ -1544,6 +1554,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     {
         if (target is null)
         {
+            AzimuthText = ElevationText = DistanceText = LidarXText = LidarYText = LidarZText = RdrIdText = "—";
             TargetStatusText = "NO DATA";
             RefreshStateText(null, fcs);
             return;
