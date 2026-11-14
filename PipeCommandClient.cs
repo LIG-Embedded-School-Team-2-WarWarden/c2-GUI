@@ -40,7 +40,8 @@ internal enum ResultCode : uint
     LidarBusy = 20,
     LidarResumeUnconfirmed = 21,
     FcsOffUnconfirmed = 22,
-    RdrStartUnconfirmed = 23
+    RdrStartUnconfirmed = 23,
+    DeviceInvalidValue = 24 // FCS가 명령 값을 INVALID_VALUE로 거부함
 }
 
 /// <summary>FCS의 객체 할당 진행 상태</summary>

@@ -1329,6 +1329,7 @@ public partial class MainWindow : Window
         ResultCode.AlreadyAssigned => "FCS에 이미 다른 객체가 할당되어 있습니다",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
+        ResultCode.DeviceInvalidValue => "FCS가 명령 값을 허용하지 않아 거부했습니다 (INVALID_VALUE). 객체 할당 중이라면 FCS의 방위각·고각 허용 범위와 설치 좌표·영점 설정을 확인해 주세요. 요청 각도는 ECS 로그의 FCS point 항목에서 확인할 수 있습니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
         ResultCode.LidarUnsupported => "RDR 펌웨어가 라이다 방출 제어를 지원하지 않습니다. ED07/DE07 지원 버전으로 업데이트해 주세요",
