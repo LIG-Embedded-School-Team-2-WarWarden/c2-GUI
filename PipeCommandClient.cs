@@ -14,6 +14,8 @@ internal enum CommandType : uint
     SetRdrElevation = 4,    // RDR 고각 설정, TargetId는 0.1도 단위
     SetAssetPosition = 5,   // 자산 좌표 설정, X/Y/Z는 미터 단위
     SetRdrOperating = 6,    // RDR 동작 상태 설정, TargetId: 0=비활성, 1=작동
+    GetCameraSettings = 8,
+    SetCameraSettings = 9,
     GetFcsBusy = 7         // 성공 응답의 FireState는 FCS busy 상태
 }
 

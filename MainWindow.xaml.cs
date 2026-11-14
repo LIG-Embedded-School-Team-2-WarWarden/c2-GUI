@@ -86,10 +86,10 @@ public partial class MainWindow : Window
             RefreshAssignments();
         });
         _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
-        Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); };
+        Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); };
         Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
         _clock.Tick += (_, _) => UpdateClock();
-        _commandStatusTimer.Tick += async (_, _) => await RefreshCommandStatusAsync();
+        _commandStatusTimer.Tick += async (_, _) => { await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); };
         _rdrElevationSendTimer.Tick += async (_, _) =>
         {
             _rdrElevationSendTimer.Stop();
@@ -417,8 +417,8 @@ public partial class MainWindow : Window
 
     private async void RdrPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(true);
     private async void FcsPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(false);
-    private void RdrPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(RdrPositionEditor, RdrPositionToggleButton, "RDR 위치 수정", "RDR 위치 접기");
-    private void FcsPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(FcsPositionEditor, FcsPositionToggleButton, "FCS 위치 수정", "FCS 위치 접기");
+    private void RdrPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(RdrPositionEditor, RdrPositionToggleButton, "RDR 영점 보정 (m)", "RDR 영점 보정 접기");
+    private void FcsPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(FcsPositionEditor, FcsPositionToggleButton, "FCS 영점 보정 (m)", "FCS 영점 보정 접기");
 
     private static void TogglePositionEditor(Border editor, Button button, string openText, string closeText)
     {
@@ -466,12 +466,13 @@ public partial class MainWindow : Window
         }
         try
         {
-            var response = await _pipeClient.SendAsync(CommandType.SetAssetPosition, rdrId: isRdr ? rdr!.Id : 0, fcsId: isRdr ? 0 : fcs!.Id,
+            var response = await _pipeClient.SendAsync(CommandType.SetCameraSettings, targetId: isRdr ? 0u : 1u, rdrId: 0, fcsId: 0,
                 positionX: x, positionY: y, positionZ: z);
             if ((ResultCode)response.ResultCode != ResultCode.Success)
                 throw new IOException(CommandResultText((ResultCode)response.ResultCode));
             if (isRdr) _rdrPositionDirty = false; else _fcsPositionDirty = false;
-            AddLog($"{(isRdr ? "RDR" : "FCS")} 좌표 변경 · X={x:0.###}, Y={y:0.###}, Z={z:0.###} m");
+            await RefreshCameraSettingsAsync();
+            AddLog($"{(isRdr ? "RDR" : "FCS")} 영점 보정 저장 · X={x:0.###}, Y={y:0.###}, Z={z:0.###} m");
         }
         catch (Exception ex) { ShowAlert($"좌표 적용에 실패했습니다: {ex.Message}", "좌표 적용 실패"); }
     }
@@ -496,7 +497,6 @@ public partial class MainWindow : Window
         RdrIdText.Text = rdr.DisplayName;
         RdrEnabledText.Text = YesNo(rdr.IsEnabled); RdrOperatingText.Text = YesNo(rdr.IsOperating); RdrConnectedText.Text = YesNo(rdr.IsConnected);
         RdrAzText.Text = $"{rdr.AzimuthDeg:0.0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0.0}°";
-        if (!_rdrPositionDirty) { _syncingPositionInputs = true; RdrXInput.Text = rdr.PositionX.ToString("0.###"); RdrYInput.Text = rdr.PositionY.ToString("0.###"); RdrZInput.Text = rdr.PositionZ.ToString("0.###"); _syncingPositionInputs = false; }
         UpdateRdrElevationControl(rdr);
         SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
         RdrOperatingText.Foreground = rdr.IsOperating
@@ -532,7 +532,6 @@ public partial class MainWindow : Window
         FcsEnabledText.Text = YesNo(fcs.IsEnabled); FcsOperatingText.Text = YesNo(fcs.IsOperating); FcsConnectedText.Text = YesNo(fcs.IsConnected);
         FcsLaserText.Text = fcs.LaserOn ? "ON" : "OFF";
         FcsAzText.Text = $"{fcs.AzimuthDeg:0.0}°"; FcsElText.Text = $"{fcs.ElevationDeg:0.0}°";
-        if (!_fcsPositionDirty) { _syncingPositionInputs = true; FcsXInput.Text = fcs.PositionX.ToString("0.###"); FcsYInput.Text = fcs.PositionY.ToString("0.###"); FcsZInput.Text = fcs.PositionZ.ToString("0.###"); _syncingPositionInputs = false; }
         var normalColor = new SolidColorBrush(Color.FromRgb(0, 230, 138));
         SetFcsValueForeground(normalColor);
         FcsLaserText.Foreground = fcs.LaserOn
