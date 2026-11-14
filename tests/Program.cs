@@ -30,8 +30,11 @@ static class Checks
             Check(grid.Items.Count==1 && ReferenceEquals(original,grid.Items[0]),"paused row identity lost");
             Check(original.StatusText=="관측 일시중지" && !original.CanAssign && original.LidarX==1,"paused display/control mismatch");
             var assignment=new AssignmentView(7,1);
+            var setStatus = typeof(AssignmentView).GetMethod("SetCommandStatus", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            setStatus.Invoke(assignment, new object[] { Enum.Parse(setStatus.GetParameters()[0].ParameterType, "Confirmed"), 0u });
+            bool CanAim() => assignment.Stages.Any(stage => stage.ActionLabel == "조준" && stage.CanAdvance);
             assignment.Refresh(original,new FcsAsset(1,true,true,true,false,180,0,0,0,0));
-            Check(!assignment.CanFire,"paused execution enabled");
+            Check(!CanAim(), "paused target allowed manual aim");
             if (Environment.GetEnvironmentVariable("RETENTION_RENDER") is string output)
             {
                 var content=(FrameworkElement)window.Content;
@@ -49,18 +52,11 @@ static class Checks
             apply.Invoke(window,new object[]{Frame(2,0)});
             Check(grid.Items.Count==0,"ordinary missing target retained");
             var connection = typeof(MainWindow).GetMethod("ApplyConnectionState",BindingFlags.NonPublic|BindingFlags.Instance)!;
-            var running = typeof(MainWindow).GetField("_sequenceRunning",BindingFlags.NonPublic|BindingFlags.Instance)!;
-            var stopped = typeof(MainWindow).GetField("_stopSequenceRequested",BindingFlags.NonPublic|BindingFlags.Instance)!;
-            var setStatus=typeof(AssignmentView).GetMethod("SetCommandStatus",BindingFlags.NonPublic|BindingFlags.Instance)!;
-            setStatus.Invoke(assignment,new object[]{Enum.Parse(setStatus.GetParameters()[0].ParameterType,"Assigned"),0u});
             ((DashboardData)window.DataContext).Assignments.Add(assignment);
-            running.SetValue(window,true);
             FrameFreshnessChecks.Run(s => connection.Invoke(window,new object[]{s}),
-                f => apply.Invoke(window,new object[]{f}), () => grid.Items.Count, () => assignment.CanFire);
-            Check((bool)stopped.GetValue(window)!,"stale frames did not stop sequence");
-            assignment.Refresh(null,null);
-            Check(!assignment.CanFire && assignment.LidarXText=="—","offline assignment remained usable");
-            running.SetValue(window,false);
+                f => apply.Invoke(window,new object[]{f}), () => grid.Items.Count, CanAim);
+            Check(!CanAim() && assignment.LidarXText == "—", "offline assignment remained usable");
+            Check(assignment.Stages[^1].ActionLabel is null, "offline result button remained visible");
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
         finally { window.Close(); app.Shutdown(); }

@@ -1087,7 +1087,7 @@ public partial class MainWindow : Window
         {
             var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
             var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
-            assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null);
+            assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null, _isSharedMemoryLive);
         }
         RefreshAssignmentEmptyState();
     }
@@ -1226,14 +1226,17 @@ public sealed class AssignmentView : INotifyPropertyChanged
         StateText = "명령 파이프 대기";
     }
 
-    public void Refresh(TargetRecord? target, FcsAsset? fcs)
+    public void Refresh(TargetRecord? target, FcsAsset? fcs) => Refresh(target, fcs, true);
+
+    internal void Refresh(TargetRecord? target, FcsAsset? fcs, bool isSharedMemoryLive)
     {
         if (target is null)
         {
             AzimuthText = ElevationText = DistanceText = LidarXText = LidarYText = LidarZText = RdrIdText = "—";
             TargetStatusText = "NO DATA";
             RefreshStateText(null, fcs);
-            RefreshStages(null);
+            if (isSharedMemoryLive) RefreshStages(null);
+            else UpdateStages(StageLabels.Select(label => new AssignmentStage(label, "")).ToArray());
             return;
         }
         AzimuthText = $"{target.AzimuthDeg:0.0}°";
@@ -1269,7 +1272,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
             UpdateStages(
             [
                 new(StageLabels[0], completed >= 3 ? "완료" : aiming ? "조준 중" : "대기", completed == 2,
-                    "조준", completed == 2 && !aiming) { Command = CommandType.StartManualAim },
+                    "조준", completed == 2 && !aiming && target?.CanAssign == true) { Command = CommandType.StartManualAim },
                 new(StageLabels[1], completed >= 4 ? "완료" : "대기", completed == 3,
                     "중지", completed == 3) { Command = CommandType.PauseManualScan },
                 new(StageLabels[2], completed >= 6 ? "완료" : firing ? "발사 중" : "대기", completed is 4 or 5,
