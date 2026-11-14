@@ -56,6 +56,17 @@ namespace
     std::array<float, kMaxTargets> g_targetY{};
     float g_rdrX = -0.5f, g_rdrY = 0.0f, g_rdrZ = 0.0f;
     float g_fcsX = 0.5f, g_fcsY = 0.0f, g_fcsZ = 0.0f;
+    std::array<std::array<float, 3>, 4> g_cameraSettings{{
+        {{-0.5f, 0.0f, 0.0f}}, {{0.5f, 0.0f, 0.0f}}, {{1.5f, 10.0f, 3.0f}}, {{120.0f, 45.0f, 0.0f}}
+    }};
+
+    std::uint32_t FloatBits(float value)
+    {
+        std::uint32_t bits{};
+        static_assert(sizeof(bits) == sizeof(value));
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits;
+    }
 
     void CompleteAdjustmentIfAligned();
 
@@ -351,6 +362,9 @@ namespace
         case CommandType::SetRdrElevation: return L"RDR 고각 설정";
         case CommandType::SetRdrOperating: return L"라이다 구동 상태 설정";
         case CommandType::GetFcsBusy: return L"FCS 작업 상태 조회";
+        case CommandType::GetCameraSettings: return L"장비 설정 조회";
+        case CommandType::SetCameraSettings: return L"장비 설정 저장";
+        case CommandType::GetRdrStartupStatus: return L"라이다 구동 상태 확인";
         default: return L"알 수 없는 명령";
         }
     }
@@ -437,12 +451,24 @@ namespace
         const auto now = std::chrono::steady_clock::now();
         const bool fcsBusy = now < g_fcsBusyUntil;
 
+        const bool setAssetPosition = type == CommandType::SetAssetPosition;
+        const bool cameraSettings = type == CommandType::GetCameraSettings || type == CommandType::SetCameraSettings;
+        const bool validIds = setAssetPosition
+            ? ((command.rdrId == 1 && command.fcsId == 0) || (command.rdrId == 0 && command.fcsId == 1))
+            : cameraSettings ? (command.rdrId == 0 && command.fcsId == 0)
+            : type == CommandType::GetRdrStartupStatus ? true
+            : (command.rdrId != 0 && command.fcsId != 0);
         if (command.magic != kPipeMagic || command.version != kPipeVersion ||
-            command.requestId == 0 || (command.commandType == static_cast<std::uint32_t>(CommandType::SetAssetPosition) ? (command.rdrId == 0) == (command.fcsId == 0) : (command.rdrId == 0 || command.fcsId == 0)))
+            command.requestId == 0 || !validIds)
         {
             result = ResultCode::InvalidRequest;
         }
-        else if (type > CommandType::GetFcsBusy)
+        else if (type != CommandType::GetStatus && type != CommandType::AssignTarget &&
+                 type != CommandType::CancelAssignment && type != CommandType::Fire &&
+                 type != CommandType::SetRdrElevation && type != CommandType::SetAssetPosition &&
+                 type != CommandType::SetRdrOperating && type != CommandType::GetFcsBusy &&
+                 type != CommandType::GetCameraSettings && type != CommandType::SetCameraSettings &&
+                 type != CommandType::GetRdrStartupStatus)
         {
             result = ResultCode::NotSupported;
         }
@@ -457,6 +483,28 @@ namespace
                 if (command.rdrId != 1 || command.fcsId != 1) result = ResultCode::InvalidRequest;
                 else if (!g_connected) result = ResultCode::AssetUnavailable;
                 else if (!g_available) result = ResultCode::DeviceError;
+                break;
+
+            case CommandType::GetRdrStartupStatus:
+                if (!g_connected) result = ResultCode::LidarDisconnected;
+                else if (!g_rdrOperating) result = ResultCode::RdrStartUnconfirmed;
+                break;
+
+            case CommandType::GetCameraSettings:
+                if (command.targetId >= g_cameraSettings.size()) result = ResultCode::InvalidRequest;
+                break;
+
+            case CommandType::SetCameraSettings:
+                if (command.targetId >= g_cameraSettings.size() ||
+                    !std::isfinite(command.positionX) || !std::isfinite(command.positionY) || !std::isfinite(command.positionZ))
+                    result = ResultCode::InvalidRequest;
+                else
+                {
+                    auto& values = g_cameraSettings[command.targetId];
+                    values = { command.positionX, command.positionY, command.positionZ };
+                    if (command.targetId == 0) { g_rdrX = command.positionX; g_rdrY = command.positionY; g_rdrZ = command.positionZ; }
+                    else if (command.targetId == 1) { g_fcsX = command.positionX; g_fcsY = command.positionY; g_fcsZ = command.positionZ; }
+                }
                 break;
 
             case CommandType::SetRdrElevation:
@@ -479,8 +527,8 @@ namespace
 
             case CommandType::SetAssetPosition:
                 if (!g_connected) result = ResultCode::AssetUnavailable;
-                else if (command.rdrId == 1 && command.fcsId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_rdrX=command.positionX; g_rdrY=command.positionY; g_rdrZ=command.positionZ; }
-                else if (command.fcsId == 1 && command.rdrId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_fcsX=command.positionX; g_fcsY=command.positionY; g_fcsZ=command.positionZ; }
+                else if (command.rdrId == 1 && command.fcsId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_rdrX=command.positionX; g_rdrY=command.positionY; g_rdrZ=command.positionZ; g_cameraSettings[0] = { g_rdrX, g_rdrY, g_rdrZ }; }
+                else if (command.fcsId == 1 && command.rdrId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_fcsX=command.positionX; g_fcsY=command.positionY; g_fcsZ=command.positionZ; g_cameraSettings[1] = { g_fcsX, g_fcsY, g_fcsZ }; }
                 else result = ResultCode::InvalidRequest;
                 break;
 
@@ -544,13 +592,21 @@ namespace
             }
         }
 
-        return PipeResponse{
+        PipeResponse response{
             kPipeMagic, kPipeVersion, command.requestId, command.commandType,
             static_cast<std::uint32_t>(result), g_fcsId, g_targetId,
             static_cast<std::uint32_t>(g_assignment),
             type == CommandType::GetFcsBusy ? (result == ResultCode::Success && fcsBusy ? 1u : 0u) : g_fireState,
             g_connected ? 1u : 0u
         };
+        if (type == CommandType::GetCameraSettings && result == ResultCode::Success)
+        {
+            const auto& values = g_cameraSettings[command.targetId];
+            response.fcsId = FloatBits(values[0]);
+            response.assignedTargetId = FloatBits(values[1]);
+            response.assignmentState = FloatBits(values[2]);
+        }
+        return response;
     }
 
     // 수신한 명령과 생성한 응답을 한글로 출력
@@ -675,7 +731,7 @@ int wmain()
     std::wcout
         << L"ECS 통제소 모의 프로그램\n"
         << L"공유 메모리: Local\\ControlStationMock.SharedMemory.v3\n"
-        << L"네임드 파이프: \\\\.\\pipe\\ECS_NamedPipe | 프로토콜 버전 2\n"
+        << L"네임드 파이프: \\\\.\\pipe\\ECS_NamedPipe | 프로토콜 버전 3\n"
         << L"고정 객체: 10개(1001~1010) | 갱신 주기: 100ms | 모터: AZ 25°/s, EL 25°/s\n"
         << L"명령어: help, status, connected on|off, available on|off, reset, quit\n";
 

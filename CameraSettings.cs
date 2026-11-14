@@ -57,7 +57,7 @@ public partial class MainWindow
             var fov = await ReadCameraGroupAsync(3);
             if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset rdr || FcsSelector.SelectedItem is not FcsAsset fcs)
                 throw new IOException("ECS 연결과 설치 위치 정보가 필요합니다.");
-            _equipmentWindow = new EquipmentSettingsWindow(
+            _equipmentWindow = new EquipmentSettingsWindow(this,
                 new[] { rdr.PositionX, rdr.PositionY, rdr.PositionZ },
                 new[] { fcs.PositionX, fcs.PositionY, fcs.PositionZ }, ranges, fov,
                 async (group, values) =>
@@ -67,7 +67,7 @@ public partial class MainWindow
                         : await _pipeClient.SendAsync(CommandType.SetCameraSettings, (uint)group, 0, 0, positionX: values[0], positionY: values[1], positionZ: values[2]);
                     if (response.ResultCode != 0) throw new IOException(CommandResultText((ResultCode)response.ResultCode));
                     await RefreshCameraSettingsAsync();
-                }) { Owner = this, Heading = Math.Clamp(rdr.AzimuthDeg, 0, 270) - 135d };
+                }, _workspaceZoom) { Heading = Math.Clamp(rdr.AzimuthDeg, 0, 270) - 135d };
             _equipmentWindow.Closed += (_, _) => _equipmentWindow = null;
             _equipmentWindow.Show();
         }
@@ -113,15 +113,26 @@ internal sealed class EquipmentSettingsWindow : Window
     private RangePreview? _preview;
     public double Heading { set { if (_preview != null) { _preview.Heading = value; _preview.InvalidateVisual(); } } }
 
-    internal EquipmentSettingsWindow(float[] rdr, float[] fcs, float[] ranges, float[] fov, Func<int, float[], Task> save)
+    internal EquipmentSettingsWindow(Window owner, float[] rdr, float[] fcs, float[] ranges, float[] fov, Func<int, float[], Task> save, double displayScale)
     {
-        Title = "장비 설정 · 독립 범위 미리보기"; Width = 720; Height = 790;
-        MinWidth = 680; MinHeight = 590; WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Title = "장비 설정 · 독립 범위 미리보기";
+        Owner = owner;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        var workArea = SystemParameters.WorkArea;
+        var availableWidth = Math.Max(1, Math.Min(workArea.Width, owner.ActualWidth) - 32);
+        var availableHeight = Math.Max(1, Math.Min(workArea.Height, owner.ActualHeight) - 64);
+        var scale = Math.Clamp(displayScale, 0.5, 1.5);
+        MaxWidth = availableWidth;
+        MaxHeight = availableHeight;
+        Width = Math.Min(720 * scale, availableWidth);
+        Height = Math.Min(790 * scale, availableHeight);
+        MinWidth = Math.Min(360, Width);
+        MinHeight = Math.Min(320, Height);
         Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("/AadcCommandCenter;component/Theme.xaml", UriKind.Relative) });
         Background = new SolidColorBrush(Color.FromRgb(7, 16, 15));
         Foreground = new SolidColorBrush(Color.FromRgb(195, 214, 206));
         FontFamily = new FontFamily("Consolas");
-        var root = new StackPanel { Margin = new Thickness(20), Background = Background };
+        var root = new StackPanel { Margin = new Thickness(20), Background = Background, LayoutTransform = new ScaleTransform(scale, scale) };
         Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         root.Children.Add(new TextBlock { Text = "장비 설정", FontSize = 16, FontWeight = FontWeights.Bold, Foreground = (Brush)Resources["Green"], Margin = new Thickness(0, 0, 0, 12) });
         root.Children.Add(new TextBlock { Text = "각 행은 별도로 저장됩니다. 위치·거리: m / 시야각: °", Margin = new Thickness(0, 0, 0, 10) });

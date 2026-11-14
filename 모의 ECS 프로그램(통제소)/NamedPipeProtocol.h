@@ -29,7 +29,10 @@ enum class CommandType : std::uint32_t
     SetRdrElevation = 4, // RDR 고각 설정, targetId는 0.1도 단위
     SetAssetPosition = 5, // RDR/FCS 좌표 설정
     SetRdrOperating = 6, // RDR 동작 상태 설정
-    GetFcsBusy = 7      // 성공 응답의 fireState: 1=작업 중, 0=작업 종료
+    GetFcsBusy = 7,      // 성공 응답의 fireState: 1=작업 중, 0=작업 종료
+    GetCameraSettings = 8, // targetId: 설정 그룹(0~3), 좌표값은 응답에 float 비트로 반환
+    SetCameraSettings = 9, // targetId: 설정 그룹(0~3), 좌표값은 float
+    GetRdrStartupStatus = 18 // 라이다 구동 준비 상태 조회
 };
 
 
@@ -45,7 +48,18 @@ enum class ResultCode : std::uint32_t
     NotAssigned = 3,      // 할당된 객체가 없음
     AlreadyAssigned = 4,  // 이미 객체가 할당되어 있음
     NotSupported = 5,     // 지원하지 않는 명령
-    DeviceError = 6       // 모의 장치 처리 오류
+    DeviceError = 6,      // 모의 장치 처리 오류
+    StatusPending = 7,    // 장비 상태 확인 대기
+    DeviceFault = 10,
+    LidarUnsupported = 15,
+    LidarUnknown = 16,
+    LidarRecoveryRequired = 17,
+    LidarStopUnconfirmed = 18,
+    LidarDisconnected = 19,
+    LidarBusy = 20,
+    LidarResumeUnconfirmed = 21,
+    FcsOffUnconfirmed = 22,
+    RdrStartUnconfirmed = 23
 };
 
 

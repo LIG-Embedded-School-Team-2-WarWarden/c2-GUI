@@ -10,7 +10,6 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
-using System.Windows.Data;
 
 namespace AadcCommandCenter;
 
@@ -25,9 +24,6 @@ public partial class MainWindow : Window
     private readonly HashSet<uint> _assignedTargets = new();
     private readonly Dictionary<uint, AssignmentView> _assignmentsByTarget = new();
     private readonly HashSet<uint> _pendingFcsAssignments = new();
-    private readonly ObservableCollection<SequenceQueueItem> _sequenceQueue = new();
-    private readonly ICollectionView _sequenceQueueView;
-    private bool _sequenceRunning, _stopSequenceRequested;
     private SharedMemoryFrameReader? _frameReader;
     private bool _isSharedMemoryLive;
     private bool _isCommandPipeLive;
@@ -55,10 +51,6 @@ public partial class MainWindow : Window
         FcsSelector.ItemsSource = _data.FcsAssets;
         TargetGrid.ItemsSource = _data.Targets;
         AssignmentGrid.ItemsSource = _data.Assignments;
-        QueueFcsSelector.ItemsSource = _data.FcsAssets;
-        _sequenceQueueView = CollectionViewSource.GetDefaultView(_sequenceQueue);
-        _sequenceQueueView.Filter = item => item is SequenceQueueItem queued && QueueFcsSelector.SelectedItem is FcsAsset selectedFcs && queued.FcsId == selectedFcs.Id;
-        SequenceQueueGrid.ItemsSource = _sequenceQueueView;
         LoadPersistentEventLog();
         AddLog($"프로그램 시작 · 로그파일 {_eventLogPath}");
         _frameReader = new SharedMemoryFrameReader();
@@ -91,11 +83,9 @@ public partial class MainWindow : Window
         {
             _data.Targets.Clear();
             _selectedTargetId = null;
-            if (_sequenceRunning) _stopSequenceRequested = true;
             TargetCountText.Text = $"0 / {SharedMemoryProtocol.TargetCapacity}";
             DrawRadar();
         }
-        UpdateQueueUploadControl();
         UpdateRdrElevationControl(RdrSelector.SelectedItem as RdrAsset);
         UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset);
         SharedMemoryStatus.Text = state;
@@ -136,8 +126,6 @@ public partial class MainWindow : Window
                 if (!_data.FcsAssets.Any(asset => asset.Id == target.SelectedFcsId))
                     target.SelectedFcsId = defaultFcsId.Value;
         }
-        if (QueueFcsSelector.SelectedItem is null && _data.FcsAssets.Count > 0)
-            QueueFcsSelector.SelectedItem = _data.FcsAssets[0];
         RdrSelector.SelectedItem = _data.RdrAssets.FirstOrDefault(x => x.Id == payload.selectedRdrId) ?? _data.RdrAssets.FirstOrDefault();
         FcsSelector.SelectedItem = _data.FcsAssets.FirstOrDefault(x => x.Id == payload.selectedFcsId) ?? _data.FcsAssets.FirstOrDefault();
         RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
@@ -145,7 +133,6 @@ public partial class MainWindow : Window
         RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
         RefreshAssignments();
         TargetCountText.Text = $"{_data.Targets.Count} / {SharedMemoryProtocol.TargetCapacity}";
-        UpdateQueueUploadControl();
         DrawRadar();
         QueueWorkspaceLayoutRefresh();
     }
@@ -753,332 +740,11 @@ public partial class MainWindow : Window
         DrawRadar();
     }
 
-    private void SelectAllTargetsClick(object sender, RoutedEventArgs e)
-    {
-        var selected = (sender as CheckBox)?.IsChecked == true;
-        foreach (var target in _data.Targets) target.IsSelected = selected;
-        UpdateQueueUploadControl();
-    }
-
-    private void TargetCheckboxChanged(object sender, RoutedEventArgs e) => Dispatcher.BeginInvoke(new Action(UpdateQueueUploadControl));
-    private void QueueFcsSelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        foreach (var item in _sequenceQueue) item.IsSelected = false;
-        if (_sequenceQueueView is not null) _sequenceQueueView.Refresh();
-        RefreshSequenceQueue();
-    }
-
-    private void QueueSelectAllClick(object sender, RoutedEventArgs e)
-    {
-        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) return;
-        var selectAll = QueueSelectAllCheckBox.IsChecked == true;
-        foreach (var item in _sequenceQueue.Where(item => item.FcsId == fcs.Id)) item.IsSelected = selectAll;
-        UpdateQueueSelectAllControl();
-    }
-
-    private void QueueItemSelectionChanged(object sender, RoutedEventArgs e) => Dispatcher.BeginInvoke(new Action(UpdateQueueSelectAllControl));
-
-    private void UpdateQueueSelectAllControl()
-    {
-        if (QueueSelectAllCheckBox is null) return;
-        var fcsId = (QueueFcsSelector.SelectedItem as FcsAsset)?.Id;
-        var visibleItems = _sequenceQueue.Where(item => item.FcsId == fcsId).ToArray();
-        QueueSelectAllCheckBox.IsChecked = visibleItems.Length > 0 && visibleItems.All(item => item.IsSelected);
-    }
-
-    private void SequenceDeleteSelectedClick(object sender, RoutedEventArgs e)
-    {
-        if (_sequenceRunning) { ShowAlert("순차 할당 중에는 대기 목록을 삭제할 수 없습니다.", "대기 삭제"); return; }
-        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) { ShowAlert("먼저 대기 목록의 FCS을 선택하세요.", "대기 삭제"); return; }
-        var selectedItems = _sequenceQueue.Where(item => item.FcsId == fcs.Id && item.IsSelected).ToArray();
-        if (selectedItems.Length == 0) { ShowAlert("삭제할 객체를 체크하세요.", "대기 삭제"); return; }
-        foreach (var item in selectedItems) _sequenceQueue.Remove(item);
-        RefreshSequenceQueue();
-        AddLog($"{fcs.DisplayName} 대기 목록에서 {selectedItems.Length}개 객체 삭제");
-    }
-
-    private void QueueMoveSelectedUpClick(object sender, RoutedEventArgs e) => MoveSelectedQueueItems(-1);
-    private void QueueMoveSelectedDownClick(object sender, RoutedEventArgs e) => MoveSelectedQueueItems(1);
-
-    private void MoveSelectedQueueItems(int direction)
-    {
-        if (_sequenceRunning) return;
-        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) return;
-        var visible = _sequenceQueue.Where(item => item.FcsId == fcs.Id).ToList();
-        if (!visible.Any(item => item.IsSelected)) { ShowAlert("순서를 바꿀 객체를 체크하세요.", "대기 목록 순서"); return; }
-
-        if (direction < 0)
-        {
-            for (var i = 1; i < visible.Count; i++)
-            {
-                if (!visible[i].IsSelected || visible[i - 1].IsSelected) continue;
-                var moving = visible[i];
-                var displaced = visible[i - 1];
-                _sequenceQueue.Move(_sequenceQueue.IndexOf(moving), _sequenceQueue.IndexOf(displaced));
-                visible[i - 1] = moving;
-                visible[i] = displaced;
-            }
-        }
-        else
-        {
-            for (var i = visible.Count - 2; i >= 0; i--)
-            {
-                if (!visible[i].IsSelected || visible[i + 1].IsSelected) continue;
-                var moving = visible[i];
-                var displaced = visible[i + 1];
-                _sequenceQueue.Move(_sequenceQueue.IndexOf(moving), _sequenceQueue.IndexOf(displaced));
-                visible[i + 1] = moving;
-                visible[i] = displaced;
-            }
-        }
-        RefreshSequenceQueue();
-    }
-
-    private void UpdateQueueUploadControl()
-    {
-        if (QueueUploadButton is null) return;
-        QueueUploadButton.IsEnabled = _data.Targets.Count > 0 && !_sequenceRunning;
-    }
-
-    private void TargetQueueToggleClick(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) return;
-        if (_sequenceRunning) { ShowAlert("순차 할당 실행 중에는 대기 목록을 변경할 수 없습니다.", "객체할당 대기 목록"); return; }
-        var queuedItem = _sequenceQueue.FirstOrDefault(item => item.TargetId == target.Id);
-        if (queuedItem is not null)
-        {
-            _sequenceQueue.Remove(queuedItem);
-            RefreshSequenceQueue();
-            AddLog($"대기 목록에서 객체 해제 · {target.DisplayName}");
-            return;
-        }
-        if (!EnsureSharedMemoryLiveForCommand("대기 목록 추가")) return;
-        var fcs = _data.FcsAssets.FirstOrDefault(asset => asset.Id == target.SelectedFcsId);
-        if (fcs is null) { ShowAlert($"{target.DisplayName} 행의 FCS을 먼저 선택하세요.", "객체할당 대기 목록"); return; }
-        if (!target.CanAssign) { ShowAlert("생존 상태인 객체만 대기 목록에 넣을 수 있습니다.", "객체할당 대기 목록"); return; }
-        if (_data.Assignments.Any(item => item.TargetId == target.Id)) { ShowAlert($"{target.DisplayName}은(는) 객체 할당 정보에 있습니다. 먼저 할당을 취소하세요.", "중복 등록 차단"); return; }
-        var rdr = _data.RdrAssets.FirstOrDefault(asset => asset.Id == target.RdrId);
-        if (rdr is null || !rdr.IsConnected || !rdr.IsOperating) { ShowAlert("라이다가 연결되어 구동 중일 때만 객체를 대기 목록에 넣을 수 있습니다.", "라이다 구동 확인"); return; }
-        _sequenceQueue.Add(new SequenceQueueItem(target.Id, fcs.Id, target.RdrId));
-        RefreshSequenceQueue();
-        AddLog($"대기 목록에 객체 추가 · {target.DisplayName} → {fcs.DisplayName}");
-    }
-
-    private void AddSelectedTargetsToQueueClick(object sender, RoutedEventArgs e)
-    {
-        if (_sequenceRunning) { ShowAlert("순차 할당 진행 중에는 대기 목록을 변경할 수 없습니다.", "객체할당 대기 목록"); return; }
-        if (QueueFcsSelector.SelectedItem is not FcsAsset fcs) { ShowAlert("우상단 대기 목록 FCS를 선택하세요.", "객체할당 대기 목록"); return; }
-        if (!EnsureSharedMemoryLiveForCommand("대기 목록 올리기")) return;
-        var selectedTargets = _data.Targets.Where(x => x.IsSelected).ToArray();
-        if (selectedTargets.Length == 0) { ShowAlert("객체 목록에서 먼저 객체를 체크하세요.", "객체할당 대기 목록"); return; }
-        var invalidTargets = new List<string>();
-        foreach (var target in selectedTargets)
-        {
-            var reasons = new List<string>();
-            if (!target.CanAssign) reasons.Add("생존 상태 아님");
-            if (_sequenceQueue.Any(item => item.TargetId == target.Id)) reasons.Add("이미 대기 목록에 등록됨");
-            if (_data.Assignments.Any(item => item.TargetId == target.Id)) reasons.Add("객체 할당 정보에 등록됨");
-            var rdr = _data.RdrAssets.FirstOrDefault(asset => asset.Id == target.RdrId);
-            if (rdr is null || !rdr.IsConnected || !rdr.IsOperating) reasons.Add("라이다 미연결 또는 정지");
-            if (reasons.Count > 0) invalidTargets.Add($"{target.DisplayName}: {string.Join(", ", reasons)}");
-        }
-        if (invalidTargets.Count > 0)
-        {
-            AddLog($"대기 목록 일괄 등록 거부 · 전체 취소 · {string.Join("; ", invalidTargets)}");
-            ShowAlert($"다음 객체를 등록할 수 없어 이번 요청의 객체는 하나도 대기 목록에 추가하지 않았습니다.\n\n{string.Join(Environment.NewLine, invalidTargets)}", "대기 목록 등록 실패");
-            return;
-        }
-        foreach (var target in selectedTargets)
-        {
-            _sequenceQueue.Add(new SequenceQueueItem(target.Id, fcs.Id, target.RdrId));
-            target.IsSelected = false;
-        }
-        SelectAllTargetsCheckBox.IsChecked = false;
-        RefreshSequenceQueue();
-        AddLog($"객체할당 대기 목록에 {selectedTargets.Length}개 등록 · {fcs.DisplayName}");
-    }
-
-    private async void SequenceStartClick(object sender, RoutedEventArgs e)
-    {
-        if (_sequenceRunning) { _stopSequenceRequested = true; SequenceStartButton.IsEnabled = false; return; }
-        if (!EnsureSharedMemoryLiveForCommand("객체 순차 할당")) return;
-        if (QueueFcsSelector.SelectedItem is not FcsAsset selectedQueueFcs) { ShowAlert("순차 할당할 FCS을 선택하세요.", "객체 순차 할당"); return; }
-        var pendingItems = _sequenceQueue.Where(item => item.FcsId == selectedQueueFcs.Id &&
-            (item.ResultText == "대기" || item.ResultText.StartsWith("실패", StringComparison.Ordinal) || item.ResultText.StartsWith("중단 ·", StringComparison.Ordinal) || item.ResultText.StartsWith("중지 ·", StringComparison.Ordinal))).ToArray();
-        if (pendingItems.Length == 0) { ShowAlert($"{selectedQueueFcs.DisplayName} 대기 목록에 순차 처리할 객체가 없습니다.", "객체 순차 할당"); return; }
-        foreach (var item in pendingItems) item.ResultText = "대기";
-        _sequenceRunning = true;
-        QueueFcsSelector.IsEnabled = false;
-        UpdateQueueUploadControl();
-        _stopSequenceRequested = false;
-        SequenceStartButton.Content = "중지 요청";
-        AddLog($"{selectedQueueFcs.DisplayName} 객체 순차 할당 시작 · {pendingItems.Length}개 객체");
-        var sequenceOwnsCurrentAssignment = false;
-        var waitForFcs = false;
-        SequenceQueueItem? currentSequenceItem = null;
-        try
-        {
-            foreach (var item in pendingItems)
-            {
-                if (_stopSequenceRequested) break;
-                currentSequenceItem = item;
-                sequenceOwnsCurrentAssignment = false;
-                if (waitForFcs)
-                {
-                    item.ResultText = SequenceQueueItem.FcsBusyWait;
-                    RefreshSequenceQueue();
-                    if (!await WaitForFcsIdleAsync(item))
-                    {
-                        item.ResultText = "대기";
-                        break;
-                    }
-                }
-                item.ResultText = "할당 요청";
-                RefreshSequenceQueue();
-                var target = _data.Targets.FirstOrDefault(x => x.Id == item.TargetId);
-                var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == item.FcsId);
-                var reacquireWait = Stopwatch.StartNew();
-                while (target?.IsObservationWaiting == true && !_stopSequenceRequested && reacquireWait.Elapsed < TimeSpan.FromSeconds(13))
-                {
-                    item.ResultText = target.StatusText;
-                    await Task.Delay(100);
-                    target = _data.Targets.FirstOrDefault(x => x.Id == item.TargetId);
-                }
-                if (_stopSequenceRequested) { item.ResultText = "대기"; break; }
-                var rdr = _data.RdrAssets.FirstOrDefault(x => x.Id == item.RdrId);
-                if (target is null || !target.CanAssign || fcs is null || !fcs.IsConnected || !fcs.IsEnabled || !fcs.IsOperating || rdr is null || !rdr.IsConnected || !rdr.IsOperating)
-                    throw new InvalidOperationException($"{TargetName(item.TargetId)} 또는 할당 자산의 연결/구동 상태를 확인하세요.");
-
-                var status = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: item.RdrId, fcsId: item.FcsId);
-                ApplyCommandResponse(status);
-                if ((AssignmentState)status.AssignmentState != AssignmentState.Idle || status.AssignedTargetId != 0)
-                    throw new InvalidOperationException("FCS에 진행 중인 수동 할당이 있습니다. 기존 할당을 취소한 뒤 다시 시작하세요.");
-                if (_stopSequenceRequested)
-                {
-                    item.ResultText = "대기";
-                    break;
-                }
-
-                var assigned = await SendPipeCommandAsync(CommandType.AssignTarget, item.RdrId, item.FcsId, item.TargetId, "순차 객체 할당");
-                if (assigned is null || (ResultCode)assigned.Value.ResultCode != ResultCode.Success)
-                    throw new InvalidOperationException(assigned is null ? "객체 할당 명령을 전송하지 못했습니다." : CommandResultText((ResultCode)assigned.Value.ResultCode));
-                ApplyCommandResponse(assigned.Value);
-                sequenceOwnsCurrentAssignment = true;
-                item.ResultText = "조준 중";
-                AddLog($"순차 할당 · {TargetName(item.TargetId)} · FCS 방향 조정 대기");
-
-                PipeResponse current = assigned.Value;
-                while ((AssignmentState)current.AssignmentState != AssignmentState.Assigned)
-                {
-                    if (_stopSequenceRequested) break;
-                    await Task.Delay(250);
-                    current = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: item.RdrId, fcsId: item.FcsId);
-                    ApplyCommandResponse(current);
-                    if ((AssignmentState)current.AssignmentState == AssignmentState.Failed || current.AssignedTargetId != item.TargetId)
-                        throw new InvalidOperationException($"{TargetName(item.TargetId)} 할당이 중단되었습니다.");
-                }
-                if (_stopSequenceRequested)
-                {
-                    var canceled = await _pipeClient.SendAsync(CommandType.CancelAssignment, 0, item.RdrId, item.FcsId);
-                    if ((ResultCode)canceled.ResultCode != ResultCode.Success) throw new InvalidOperationException($"{TargetName(item.TargetId)} 할당 취소 실패: {CommandResultText((ResultCode)canceled.ResultCode)}");
-                    item.ResultText = "중지 · 할당 취소";
-                    break;
-                }
-
-                var fired = await SendPipeCommandAsync(CommandType.Fire, item.RdrId, item.FcsId, item.TargetId, "순차 실행");
-                if (fired is null || (ResultCode)fired.Value.ResultCode != ResultCode.Success)
-                    throw new InvalidOperationException(fired is null ? "실행 명령을 전송하지 못했습니다." : CommandResultText((ResultCode)fired.Value.ResultCode));
-                ApplyCommandResponse(fired.Value);
-                item.ResultText = "실행 중";
-                AddLog($"순차 실행 접수 · {TargetName(item.TargetId)}");
-
-                var laserSeenOn = false;
-                var laserWaitStarted = DateTime.UtcNow;
-                do
-                {
-                    var laserOn = _data.FcsAssets.FirstOrDefault(x => x.Id == item.FcsId)?.LaserOn == true;
-                    laserSeenOn |= laserOn;
-                    if (laserSeenOn && !laserOn) break;
-                    if (DateTime.UtcNow - laserWaitStarted > TimeSpan.FromSeconds(10)) throw new TimeoutException("레이저 종료 상태를 확인하지 못했습니다.");
-                    await Task.Delay(200);
-                } while (true);
-                var canceledAfterFire = await _pipeClient.SendAsync(CommandType.CancelAssignment, 0, item.RdrId, item.FcsId);
-                if ((ResultCode)canceledAfterFire.ResultCode != ResultCode.Success) throw new InvalidOperationException($"{TargetName(item.TargetId)} 실행 후 할당 취소 실패: {CommandResultText((ResultCode)canceledAfterFire.ResultCode)}");
-                waitForFcs = true;
-                item.ResultText = "완료 · 실행 후 자동 취소";
-                RefreshSequenceQueue();
-                if (!_stopSequenceRequested) AddLog($"순차 처리 완료 · {TargetName(item.TargetId)} · 자동 취소 완료");
-            }
-            if (_stopSequenceRequested) AddLog("객체 순차 할당 중지 · 미처리 객체는 대기 목록에 유지");
-            else if (!_sequenceQueue.Any(item => item.FcsId == selectedQueueFcs.Id && item.ResultText == "대기")) AddLog($"{selectedQueueFcs.DisplayName} 객체 순차 할당 완료");
-            else AddLog("객체 순차 할당 중지 · 미처리 객체는 대기 목록에 유지");
-        }
-        catch (Exception ex)
-        {
-            var active = currentSequenceItem;
-            if (active is not null)
-            {
-                if (sequenceOwnsCurrentAssignment)
-                {
-                    try { await _pipeClient.SendAsync(CommandType.CancelAssignment, 0, active.RdrId, active.FcsId); } catch { }
-                }
-                active.ResultText = $"중단 · {ex.Message}";
-            }
-            AddLog($"순차 실행 중단 · {ex.Message}");
-            ShowAlert(ex.Message, "순차 실행 중단");
-        }
-        finally
-        {
-            _sequenceRunning = false;
-            _stopSequenceRequested = false;
-            QueueFcsSelector.IsEnabled = true;
-            SequenceStartButton.Content = "객체 순차 할당";
-            SequenceStartButton.IsEnabled = true;
-            RefreshSequenceQueue();
-            UpdateQueueUploadControl();
-        }
-    }
-
-    private async Task<bool> WaitForFcsIdleAsync(SequenceQueueItem item)
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        try
-        {
-            while (!_stopSequenceRequested)
-            {
-                var response = await _pipeClient.SendAsync(CommandType.GetFcsBusy,
-                    rdrId: item.RdrId, fcsId: item.FcsId, cancellationToken: timeout.Token);
-                if (_stopSequenceRequested) return false;
-                var result = (ResultCode)response.ResultCode;
-                if (result == ResultCode.NotSupported)
-                    throw new InvalidOperationException("ECS가 FCS 작업 상태 조회를 지원하지 않습니다. ECS를 먼저 업데이트하세요.");
-                if (response.IsConnected == 0)
-                    throw new InvalidOperationException("FCS 작업 종료 대기 중 연결이 끊겼습니다.");
-                if (result == ResultCode.Success && response.FireState == 0) return true;
-                if (result != ResultCode.Success && result != ResultCode.AssetUnavailable && result != ResultCode.StatusPending)
-                    throw new InvalidOperationException($"FCS 작업 상태 조회 실패 · {CommandResultText(result)}");
-                await Task.Delay(250, timeout.Token);
-            }
-            return false;
-        }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
-        {
-            if (_stopSequenceRequested) return false;
-            throw new TimeoutException("FCS 작업 종료 대기 시간 초과");
-        }
-    }
-
     private async void TargetAssignClick(object sender, RoutedEventArgs e)
     {
         if (!EnsureSharedMemoryLiveForCommand("객체 할당")) return;
         if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("객체 할당 거부 · 객체 행을 확인할 수 없음"); return; }
         AddLog($"객체 할당 버튼 클릭 · {target.DisplayName}");
-        if (_sequenceQueue.Any(item => item.TargetId == target.Id))
-        {
-            AddLog($"객체 할당 거부 · {target.DisplayName} 대기 목록 등록 중");
-            ShowAlert($"{target.DisplayName}은(는) 객체할당 대기 목록에 등록되어 있습니다. 대기 목록에서 해제한 뒤 직접 할당하세요.", "대기 목록 등록 객체");
-            return;
-        }
         var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == target.SelectedFcsId);
         if (fcs is null)
         {
@@ -1404,26 +1070,9 @@ public partial class MainWindow : Window
             assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null);
         }
         RefreshAssignmentEmptyState();
-        UpdateQueueUploadControl();
     }
 
     private void RefreshAssignmentEmptyState() => AssignmentEmptyText.Visibility = _data.Assignments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
-    private void RefreshSequenceQueue()
-    {
-        foreach (var assetQueue in _sequenceQueue.GroupBy(item => item.FcsId))
-        {
-            var order = 1;
-            foreach (var item in assetQueue) item.OrderText = (order++).ToString();
-        }
-        var queuedIds = _sequenceQueue.Select(item => item.TargetId).ToHashSet();
-        foreach (var target in _data.Targets) target.IsQueued = queuedIds.Contains(target.Id);
-        var selectedFcsId = (QueueFcsSelector.SelectedItem as FcsAsset)?.Id;
-        SequenceQueueText.Text = $"{_sequenceQueue.Count(item => item.FcsId == selectedFcsId)}개";
-        _sequenceQueueView.Refresh();
-        UpdateQueueSelectAllControl();
-        UpdateQueueUploadControl();
-    }
 
     private void AddLog(string text)
     {
@@ -1448,33 +1097,6 @@ public sealed class DashboardData
     public ObservableCollection<FcsAsset> FcsAssets { get; } = new();
     public ObservableCollection<TargetRecord> Targets { get; } = new();
     public ObservableCollection<AssignmentView> Assignments { get; } = new();
-}
-
-public sealed class SequenceQueueItem : INotifyPropertyChanged
-{
-    internal const string FcsBusyWait = "FCS 작업 종료 대기";
-    private string _orderText = "", _resultText = "대기";
-    private bool _isSelected;
-    public uint TargetId { get; }
-    public uint FcsId { get; }
-    public uint RdrId { get; }
-    public string TargetName => $"TGT-{TargetId}";
-    public string FcsName => $"FCS-{FcsId:000}";
-    public string StatusText => _resultText switch
-    {
-        "대기" or FcsBusyWait => "대기",
-        "할당 요청" => "할당",
-        "조준 중" => "조준",
-        "실행 중" => "실행",
-        "중지 · 할당 취소" => "중지",
-        "완료 · 실행 후 자동 취소" => "완료",
-        _ => "실패"
-    };
-    public string OrderText { get => _orderText; set { if (_orderText == value) return; _orderText = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(OrderText))); } }
-    public bool IsSelected { get => _isSelected; set { if (_isSelected == value) return; _isSelected = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsSelected))); } }
-    public string ResultText { get => _resultText; set { if (_resultText == value) return; _resultText = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ResultText))); PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StatusText))); } }
-    public event PropertyChangedEventHandler? PropertyChanged;
-    public SequenceQueueItem(uint targetId, uint fcsId, uint rdrId) { TargetId = targetId; FcsId = fcsId; RdrId = rdrId; }
 }
 
 public sealed class AssignmentView : INotifyPropertyChanged
@@ -1652,8 +1274,6 @@ public sealed class FcsAsset : INotifyPropertyChanged
 public sealed class TargetRecord : INotifyPropertyChanged
 {
     private uint _selectedFcsId;
-    private bool _isSelected;
-    private bool _isQueued;
     public uint Id { get; }
     private float _azimuthDeg, _elevationDeg;
     private float _distanceM, _lidarX, _lidarY, _lidarZ;
@@ -1671,8 +1291,6 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public byte Valid { get => _valid; private set => Set(ref _valid, value); }
     public bool IsAssigned { get => _isAssigned; set => Set(ref _isAssigned, value); }
     public bool IsAssignmentPending { get => _isAssignmentPending; set => Set(ref _isAssignmentPending, value); }
-    public bool IsSelected { get => _isSelected; set => Set(ref _isSelected, value); }
-    public bool IsQueued { get => _isQueued; set => Set(ref _isQueued, value); }
     public uint SelectedFcsId { get => _selectedFcsId; set { if (_selectedFcsId == value) return; _selectedFcsId = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedFcsId))); } }
     public string DisplayName => $"TGT-{Id}";
     public string AzimuthText => $"{AzimuthDeg:0.0}°";
