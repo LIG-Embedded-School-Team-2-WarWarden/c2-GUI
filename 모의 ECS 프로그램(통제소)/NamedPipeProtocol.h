@@ -32,7 +32,16 @@ enum class CommandType : std::uint32_t
     GetFcsBusy = 7,      // 성공 응답의 fireState: 1=작업 중, 0=작업 종료
     GetCameraSettings = 8, // targetId: 설정 그룹(0~3), 좌표값은 응답에 float 비트로 반환
     SetCameraSettings = 9, // targetId: 설정 그룹(0~3), 좌표값은 float
-    GetRdrStartupStatus = 18 // 라이다 구동 준비 상태 조회
+    GetRdrStartupStatus = 18, // 라이다 구동 준비 상태 조회
+    RegisterManualTarget = 1001,
+    ConfirmManualAssignment = 1002,
+    StartManualAim = 1003,
+    PauseManualScan = 1004,
+    StartManualFire = 1005,
+    ConfirmManualFire = 1006,
+    ResumeManualScan = 1007,
+    ConfirmManualResult = 1008,
+    RetryManualAssignment = 1009
 };
 
 
@@ -72,7 +81,17 @@ enum class AssignmentState : std::uint32_t
     Idle = 0,       // 할당된 객체가 없음
     Adjusting = 1,  // 객체 방향 조정 모의 진행 중
     Assigned = 2,   // 객체 할당 완료
-    Failed = 3      // 객체 할당 실패
+    Failed = 3,     // 객체 할당 실패
+    Detected = 101,
+    Confirmed = 102,
+    Aimed = 103,
+    ScanPaused = 104,
+    Firing = 105,
+    FireConfirmed = 106,
+    ScanResumed = 107,
+    ResultConfirmed = 108,
+    ManualAiming = 110,
+    TargetStillPresent = 111
 };
 
 

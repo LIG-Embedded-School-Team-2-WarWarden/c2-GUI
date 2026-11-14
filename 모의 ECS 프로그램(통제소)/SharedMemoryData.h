@@ -34,6 +34,7 @@ constexpr std::uint8_t kTargetDead = 1;
 
 // 객체가 감지되지 않는 상태
 constexpr std::uint8_t kTargetMissing = 2;
+constexpr std::uint8_t kTargetObservationPaused = 4; // 마지막 관측 위치만 표시 (valid=0)
 
 
 // ============================================================

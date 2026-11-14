@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _rdrElevationSendTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly PipeCommandClient _pipeClient = new();
     private readonly Dictionary<uint, uint> _targetFcsSelections = new();
+    private readonly Dictionary<uint, int> _targetListOrder = new();
     private readonly HashSet<uint> _assignedTargets = new();
     private readonly Dictionary<uint, AssignmentView> _assignmentsByTarget = new();
     private readonly HashSet<uint> _pendingFcsAssignments = new();
@@ -50,7 +51,7 @@ public partial class MainWindow : Window
         RdrSelector.ItemsSource = _data.RdrAssets;
         FcsSelector.ItemsSource = _data.FcsAssets;
         TargetGrid.ItemsSource = _data.Targets;
-        AssignmentGrid.ItemsSource = _data.Assignments;
+        AssignmentEmptyState.Content = new AssignmentView(0, 0);
         LoadPersistentEventLog();
         AddLog($"프로그램 시작 · 로그파일 {_eventLogPath}");
         _frameReader = new SharedMemoryFrameReader();
@@ -117,7 +118,14 @@ public partial class MainWindow : Window
 
         SyncById(_data.RdrAssets, rdrs, x => x.Id, (current, next) => current.UpdateFrom(next));
         SyncById(_data.FcsAssets, fcs, x => x.Id, (current, next) => current.UpdateFrom(next));
-        SyncById(_data.Targets, targets, x => x.Id, (current, next) => current.UpdateFrom(next));
+        foreach (var target in targets)
+        {
+            _targetListOrder.TryAdd(target.Id, _targetListOrder.Count);
+            if (_assignmentsByTarget.TryGetValue(target.Id, out var assignment) && assignment.IsConfirmedHit)
+                target.MarkHit();
+        }
+        SyncById(_data.Targets, targets, x => x.Id, (current, next) => current.UpdateFrom(next),
+            target => _targetListOrder[target.Id]);
         var defaultFcsId = _data.FcsAssets.FirstOrDefault(asset => asset.Id == payload.selectedFcsId)?.Id
             ?? _data.FcsAssets.FirstOrDefault()?.Id;
         if (defaultFcsId.HasValue)
@@ -137,7 +145,8 @@ public partial class MainWindow : Window
         QueueWorkspaceLayoutRefresh();
     }
 
-    private static void SyncById<T>(ObservableCollection<T> current, IReadOnlyCollection<T> incoming, Func<T, uint> getId, Action<T, T> update)
+    private static void SyncById<T>(ObservableCollection<T> current, IReadOnlyCollection<T> incoming, Func<T, uint> getId,
+        Action<T, T> update, Func<T, int>? getOrder = null)
     {
         var ids = incoming.Select(getId).ToHashSet();
         for (var i = current.Count - 1; i >= 0; i--)
@@ -146,8 +155,13 @@ public partial class MainWindow : Window
         foreach (var next in incoming)
         {
             var existing = current.FirstOrDefault(item => getId(item) == getId(next));
-            if (existing is null) current.Add(next);
-            else update(existing, next);
+            if (existing is not null)
+            {
+                update(existing, next);
+                continue;
+            }
+            var index = getOrder is null ? current.Count : current.TakeWhile(item => getOrder(item) < getOrder(next)).Count();
+            current.Insert(index, next);
         }
     }
 
@@ -193,10 +207,8 @@ public partial class MainWindow : Window
             FitWorkspaceWidth();
             WorkspaceLayout.InvalidateMeasure();
             TargetGrid.InvalidateMeasure();
-            AssignmentGrid.InvalidateMeasure();
             WorkspaceLayout.UpdateLayout();
             RecalculateStarColumns(TargetGrid);
-            RecalculateStarColumns(AssignmentGrid);
         }));
     }
 
@@ -524,6 +536,7 @@ public partial class MainWindow : Window
         RdrAzText.Text = $"{rdr.AzimuthDeg:0.0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0.0}°";
         UpdateRdrElevationControl(rdr);
         SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
+        if (!rdr.IsEnabled) RdrEnabledText.Foreground = Brushes.Orange;
         RdrOperatingText.Foreground = rdr.IsOperating
             ? new SolidColorBrush(Color.FromRgb(0, 230, 138))
             : new SolidColorBrush(Color.FromRgb(255, 176, 0));
@@ -637,11 +650,7 @@ public partial class MainWindow : Window
                 IsHitTestVisible = false, HorizontalFieldOfView = fov?[0] ?? 120
             };
             RadarCanvas.Children.Add(overlay);
-            MapRangeSummary.Text = $"RDR {ranges[0]:G4}–{ranges[1]:G4} m · FCS shoot ≤ {ranges[2]:G4} m";
         }
-        else MapRangeSummary.Text = "거리 설정: ECS 연결 대기";
-        MapFovSummary.Text = $"XT-M60 · 수평 {fov?[0] ?? 120:G4}° / 수직 {fov?[1] ?? 45:G4}°\n방향 {rdrDisplayAzimuth:0.#}° · 고각 {rdr.ElevationDeg:0.#}°" +
-            (_isSharedMemoryLive ? "" : " · 마지막 수신값");
 
         var fcsPoint = fcs is null ? (Point?)null : Map(fcs.PositionX, fcs.PositionY);
         var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id)?.TargetId;
@@ -799,7 +808,7 @@ public partial class MainWindow : Window
         AddLog($"{target.DisplayName} → {fcs.DisplayName} 명령 파이프 연결 시도 중");
 
         PipeResponse? response;
-        try { response = await SendPipeCommandAsync(CommandType.AssignTarget, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false); }
+        try { response = await SendPipeCommandAsync(CommandType.RegisterManualTarget, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false); }
         finally
         {
             _pendingFcsAssignments.Remove(fcs.Id);
@@ -836,11 +845,14 @@ public partial class MainWindow : Window
     private async void CancelAssignmentClick(object sender, RoutedEventArgs e)
     {
         if (!EnsureSharedMemoryLiveForCommand("객체 할당 취소")) return;
-        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("객체 할당 취소 거부 · 할당 행을 확인할 수 없음"); return; }
+        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment || !assignment.StageCommandsEnabled) return;
         AddLog($"객체 할당 취소 버튼 클릭 · {assignment.TargetName}");
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
         uint rdrId = target?.RdrId ?? 1;
-        var response = await SendPipeCommandAsync(CommandType.CancelAssignment, rdrId, assignment.FcsId, assignment.TargetId, "객체 할당 취소");
+        assignment.SetStageCommandPending(true);
+        PipeResponse? response;
+        try { response = await SendPipeCommandAsync(CommandType.CancelAssignment, rdrId, assignment.FcsId, assignment.TargetId, "객체 할당 취소"); }
+        finally { assignment.SetStageCommandPending(false); }
         if (response is null) return;
         ApplyCommandResponse(response.Value);
         if ((ResultCode)response.Value.ResultCode != ResultCode.Success)
@@ -853,36 +865,32 @@ public partial class MainWindow : Window
         AddLog($"객체 할당 취소 명령 접수 · {assignment.TargetName}");
     }
 
-    private async void FireAssignmentClick(object sender, RoutedEventArgs e)
+    private async void AssignmentStageClick(object sender, RoutedEventArgs e)
     {
-        if (!EnsureSharedMemoryLiveForCommand("실행")) return;
-        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment) { AddLog("실행 거부 · 할당 행을 확인할 수 없음"); return; }
-        AddLog($"실행 버튼 클릭 · {assignment.TargetName}");
-        var targetName = assignment.TargetName;
-        var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
-        var unmetConditions = new List<string>();
-        if (_data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId)?.CanAssign != true) unmetConditions.Add("최신 재관측 확인이 필요합니다");
-        if (!assignment.CanFire) unmetConditions.Add($"현재 할당 상태: {assignment.StateText} (할당 완료 필요)");
-        if (fcs is null) unmetConditions.Add("FCS 데이터를 확인할 수 없습니다");
-        if (unmetConditions.Count > 0)
-        {
-            AddLog($"실행 거부 · {targetName} · {string.Join(", ", unmetConditions)}");
-            ShowAlert(string.Join(Environment.NewLine, unmetConditions), "실행 조건 미충족");
-            return;
-        }
-        if (fcs is null) return;
+        if (sender is not FrameworkElement { DataContext: AssignmentStage stage, Tag: AssignmentView assignment } ||
+            !stage.CanAdvance || stage.Command is not CommandType command ||
+            !assignment.StageCommandsEnabled || !assignment.Stages.Contains(stage)) return;
+        if (!EnsureSharedMemoryLiveForCommand(stage.Label)) return;
+
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
-        var response = await SendPipeCommandAsync(CommandType.Fire, target?.RdrId ?? 1, assignment.FcsId, assignment.TargetId, "실행");
-        if (response is null) return;
-        ApplyCommandResponse(response.Value);
-        if ((ResultCode)response.Value.ResultCode != ResultCode.Success)
+        if ((command is CommandType.StartManualAim or CommandType.PauseManualScan) &&
+            target?.CanAssign != true)
         {
-            var message = CommandResultText((ResultCode)response.Value.ResultCode);
-            AddLog($"실행 거부 · {targetName} · {message}");
-            ShowAlert(message, "실행 거부");
+            ShowAlert("최신 관측 정보가 필요합니다.", stage.Label);
             return;
         }
-        AddLog($"실행 명령 응답 · {targetName} → {fcs.DisplayName} · {(response.Value.FireState == 1 ? "실행 완료" : "실행 접수")}");
+
+        assignment.SetStageCommandPending(true);
+        try
+        {
+            var response = await SendPipeCommandAsync(command, target?.RdrId ?? 1, assignment.FcsId, assignment.TargetId, stage.Label);
+            if (response is null) return;
+            ApplyCommandResponse(response.Value);
+            var result = (ResultCode)response.Value.ResultCode;
+            if (result == ResultCode.Success) AddLog($"{stage.Label} · {assignment.TargetName} → {assignment.FcsName}");
+            else ShowAlert(CommandResultText(result), stage.Label);
+        }
+        finally { assignment.SetStageCommandPending(false); }
     }
 
     private void ShowAlert(string message, string title) =>
@@ -890,7 +898,8 @@ public partial class MainWindow : Window
 
     private async Task RefreshCommandStatusAsync()
     {
-        if (_isRefreshingCommandStatus || _pendingFcsAssignments.Count > 0) return;
+        if (_isRefreshingCommandStatus || _pendingFcsAssignments.Count > 0 ||
+            _data.Assignments.Any(assignment => assignment.IsStageCommandPending)) return;
         _isRefreshingCommandStatus = true;
         try
         {
@@ -974,6 +983,7 @@ public partial class MainWindow : Window
             {
                 target.IsAssigned = true;
                 target.SelectedFcsId = response.FcsId;
+                if (state == AssignmentState.ResultConfirmed) target.MarkHit();
             }
         }
 
@@ -987,12 +997,22 @@ public partial class MainWindow : Window
 
     private static string TargetName(uint targetId) => targetId == 0 ? "없음" : $"TGT-{targetId}";
 
-    private static string AssignmentStateText(AssignmentState state) => state switch
+    internal static string AssignmentStateText(AssignmentState state) => state switch
     {
         AssignmentState.Idle => "대기",
         AssignmentState.Adjusting => "FCS 조준 중",
         AssignmentState.Assigned => "할당 완료",
         AssignmentState.Failed => "할당 실패",
+        AssignmentState.Detected => "할당 대기",
+        AssignmentState.Confirmed => "할당 완료 · 조준 대기",
+        AssignmentState.ManualAiming => "FCS 조준 중",
+        AssignmentState.Aimed => "조준 완료",
+        AssignmentState.ScanPaused => "라이다 조사 중지 완료",
+        AssignmentState.Firing => "모의 발사 진행",
+        AssignmentState.FireConfirmed => "발사 완료",
+        AssignmentState.ScanResumed => "조사 재개 완료 · 결과 판정 중",
+        AssignmentState.ResultConfirmed => "결과 확인 · HIT",
+        AssignmentState.TargetStillPresent => "결과 확인 · 객체 유지",
         _ => "알 수 없음"
     };
 
@@ -1072,7 +1092,7 @@ public partial class MainWindow : Window
         RefreshAssignmentEmptyState();
     }
 
-    private void RefreshAssignmentEmptyState() => AssignmentEmptyText.Visibility = _data.Assignments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    private void RefreshAssignmentEmptyState() => AssignmentEmptyState.Visibility = _data.Assignments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
     private void AddLog(string text)
     {
@@ -1099,8 +1119,18 @@ public sealed class DashboardData
     public ObservableCollection<AssignmentView> Assignments { get; } = new();
 }
 
+public sealed record AssignmentStage(string Label, string Status, bool IsCurrent = false, string? ActionLabel = null, bool CanAdvance = false)
+{
+    internal CommandType? Command { get; init; }
+    public bool IsComplete => Status.StartsWith("완료", StringComparison.Ordinal);
+}
+
 public sealed class AssignmentView : INotifyPropertyChanged
 {
+    private static readonly string[] StageLabels =
+    [
+        "1. 조준", "2. 조사 중지", "3. 발사", "4. 조사 재개", "5. 결과 확인"
+    ];
     private uint _fcsId;
     private string _azimuthText = "—", _elevationText = "—", _distanceText = "—", _lidarXText = "—", _lidarYText = "—", _lidarZText = "—", _rdrIdText = "—", _targetStatusText = "WAITING", _stateText = "명령 파이프 대기";
     private bool _launchRequested;
@@ -1109,8 +1139,13 @@ public sealed class AssignmentView : INotifyPropertyChanged
     private bool _connectionPending, _connectionFailed;
     public uint TargetId { get; }
     public string TargetName => $"TGT-{TargetId}";
-    public uint FcsId { get => _fcsId; set { if (_fcsId == value) return; _fcsId = value; OnPropertyChanged(); OnPropertyChanged(nameof(FcsName)); } }
+    public uint FcsId { get => _fcsId; set { if (_fcsId == value) return; _fcsId = value; OnPropertyChanged(); OnPropertyChanged(nameof(FcsName)); OnPropertyChanged(nameof(ProgressTitle)); } }
     public string FcsName => $"FCS-{FcsId:000}";
+    public bool HasAssignment => TargetId != 0;
+    internal bool IsConfirmedHit => _commandState == AssignmentState.ResultConfirmed;
+    public string ProgressTitle => HasAssignment ? $"{TargetName}  →  {FcsName}" : "미할당";
+    public IReadOnlyList<AssignmentStage> Stages { get; private set; } = StageLabels
+        .Select(label => new AssignmentStage(label, "")).ToArray();
     public string AzimuthText { get => _azimuthText; private set => Set(ref _azimuthText, value); }
     public string ElevationText { get => _elevationText; private set => Set(ref _elevationText, value); }
     public string DistanceText { get => _distanceText; private set => Set(ref _distanceText, value); }
@@ -1131,12 +1166,29 @@ public sealed class AssignmentView : INotifyPropertyChanged
         }
     }
     public bool CanRetry => _connectionFailed || _commandState == AssignmentState.Failed;
-    public bool IsActiveCommandState => _connectionPending || _commandState is AssignmentState.Adjusting or AssignmentState.Assigned || _fireState != 0;
+    public bool IsActiveCommandState => _connectionPending || _commandState is AssignmentState.Adjusting or AssignmentState.Assigned ||
+        ManualCompletedStep > 0 || _fireState != 0;
+    public bool IsStageCommandPending { get; private set; }
+    public bool StageCommandsEnabled => HasAssignment && !_connectionPending && !IsStageCommandPending;
     public bool CanFire => StateText == "할당 완료";
     public bool LaunchRequested { get => _launchRequested; set { if (_launchRequested == value) return; _launchRequested = value; OnPropertyChanged(); } }
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public AssignmentView(uint targetId, uint fcsId) { TargetId = targetId; _fcsId = fcsId; }
+
+    public void SetStageCommandPending(bool pending)
+    {
+        IsStageCommandPending = pending;
+        OnPropertyChanged(nameof(StageCommandsEnabled));
+    }
+
+    private int ManualCompletedStep => _commandState switch
+    {
+        AssignmentState.ManualAiming => 2,
+        AssignmentState.TargetStillPresent => 8,
+        >= AssignmentState.Detected and <= AssignmentState.ResultConfirmed => (int)_commandState.Value - 100,
+        _ => 0
+    };
 
     public void SetConnecting()
     {
@@ -1144,6 +1196,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _connectionFailed = false;
         _commandState = null;
         StateText = "연결 시도 중";
+        OnPropertyChanged(nameof(StageCommandsEnabled));
     }
 
     public void SetConnectionFailed()
@@ -1160,6 +1213,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _connectionFailed = false;
         _commandState = state;
         _fireState = fireState;
+        OnPropertyChanged(nameof(StageCommandsEnabled));
         RefreshStateText(null, null);
     }
 
@@ -1179,6 +1233,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
             AzimuthText = ElevationText = DistanceText = LidarXText = LidarYText = LidarZText = RdrIdText = "—";
             TargetStatusText = "NO DATA";
             RefreshStateText(null, fcs);
+            RefreshStages(null);
             return;
         }
         AzimuthText = $"{target.AzimuthDeg:0.0}°";
@@ -1190,12 +1245,73 @@ public sealed class AssignmentView : INotifyPropertyChanged
         RdrIdText = target.RdrId.ToString();
         TargetStatusText = target.StatusText;
         RefreshStateText(target, fcs);
+        RefreshStages(target);
+    }
+
+    private void RefreshStages(TargetRecord? target)
+    {
+        if (!HasAssignment) return;
+
+        int completed = ManualCompletedStep;
+        if (completed > 0)
+        {
+            bool aiming = _commandState == AssignmentState.ManualAiming;
+            bool firing = _commandState == AssignmentState.Firing;
+            var result = _commandState switch
+            {
+                AssignmentState.ResultConfirmed => new AssignmentStage(StageLabels[4], "완료 · HIT", true, "할당 해제", true)
+                    { Command = CommandType.CancelAssignment },
+                AssignmentState.TargetStillPresent => new AssignmentStage(StageLabels[4], "ALIVE", true, "다시 시도", true)
+                    { Command = CommandType.RetryManualAssignment },
+                AssignmentState.ScanResumed => new AssignmentStage(StageLabels[4], "판정 중", true, "할당 해제"),
+                _ => new AssignmentStage(StageLabels[4], "대기", ActionLabel: "할당 해제")
+            };
+            UpdateStages(
+            [
+                new(StageLabels[0], completed >= 3 ? "완료" : aiming ? "조준 중" : "대기", completed == 2,
+                    "조준", completed == 2 && !aiming) { Command = CommandType.StartManualAim },
+                new(StageLabels[1], completed >= 4 ? "완료" : "대기", completed == 3,
+                    "중지", completed == 3) { Command = CommandType.PauseManualScan },
+                new(StageLabels[2], completed >= 6 ? "완료" : firing ? "발사 중" : "대기", completed is 4 or 5,
+                    "발사", completed == 4) { Command = CommandType.StartManualFire },
+                new(StageLabels[3], completed >= 7 ? "완료" : "대기", completed == 6,
+                    "재개", completed == 6) { Command = CommandType.ResumeManualScan },
+                result
+            ]);
+            return;
+        }
+
+        bool assigned = _commandState is AssignmentState.Adjusting or AssignmentState.Assigned;
+        bool aimed = _commandState == AssignmentState.Assigned;
+        bool fireComplete = _fireState == 1;
+        bool hit = target?.Status == 1;
+        AssignmentStage[] stages =
+        [
+            new(StageLabels[0], aimed ? "완료" : assigned ? "진행 중" : "대기", assigned && !fireComplete && !hit),
+            new(StageLabels[1], "미확인"),
+            new(StageLabels[2], fireComplete ? "완료" : "대기"),
+            new(StageLabels[3], "미확인"),
+            new(StageLabels[4], hit ? "명중" : "미판정", hit, "할당 해제")
+        ];
+        UpdateStages(stages);
+    }
+
+    private void UpdateStages(AssignmentStage[] stages)
+    {
+        if (Stages.SequenceEqual(stages)) return;
+        Stages = stages;
+        OnPropertyChanged(nameof(Stages));
     }
 
     private void RefreshStateText(TargetRecord? target, FcsAsset? fcs)
     {
         if (_connectionPending) { StateText = "연결 시도 중"; return; }
         if (_connectionFailed) { StateText = "연결 실패 · 재시도 가능"; return; }
+        if (ManualCompletedStep > 0)
+        {
+            StateText = MainWindow.AssignmentStateText(_commandState!.Value);
+            return;
+        }
         if (target?.IsObservationWaiting == true) { StateText = target.StatusText; return; }
         if (_fireState != 0) { StateText = "실행 완료"; return; }
         if (target?.Status == 1) { StateText = "실행 완료"; return; }
@@ -1311,6 +1427,7 @@ public sealed class TargetRecord : INotifyPropertyChanged
         UpdateFrom(azimuthDeg, elevationDeg, distanceM, lidarX, lidarY, lidarZ, rdrId, status, valid ? (byte)1 : (byte)0);
     }
     public void UpdateFrom(TargetRecord other) => UpdateFrom(other.AzimuthDeg, other.ElevationDeg, other.DistanceM, other.LidarX, other.LidarY, other.LidarZ, other.RdrId, other.Status, other.Valid);
+    internal void MarkHit() => Status = 1;
     private void UpdateFrom(float az, float el, float distance, float x, float y, float z, uint rdrId, byte status, byte valid)
     { AzimuthDeg = az; ElevationDeg = el; DistanceM = distance; LidarX = x; LidarY = y; LidarZ = z; RdrId = rdrId; Status = status; Valid = valid; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)

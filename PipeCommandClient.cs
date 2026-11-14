@@ -17,7 +17,16 @@ internal enum CommandType : uint
     GetRdrStartupStatus = 18,
     GetCameraSettings = 8,
     SetCameraSettings = 9,
-    GetFcsBusy = 7         // 성공 응답의 FireState는 FCS busy 상태
+    GetFcsBusy = 7,        // 성공 응답의 FireState는 FCS busy 상태
+    RegisterManualTarget = 1001,
+    ConfirmManualAssignment = 1002,
+    StartManualAim = 1003,
+    PauseManualScan = 1004,
+    StartManualFire = 1005,
+    ConfirmManualFire = 1006,
+    ResumeManualScan = 1007,
+    ConfirmManualResult = 1008,
+    RetryManualAssignment = 1009
 }
 
 /// <summary>Named Pipe 명령 처리 결과</summary>
@@ -49,7 +58,17 @@ internal enum AssignmentState : uint
     Idle = 0,       // 할당된 객체 없음
     Adjusting = 1,  // FCS이 객체 방향으로 조정 중
     Assigned = 2,   // 객체 방위각과 고각에 도달
-    Failed = 3      // 객체 할당 실패
+    Failed = 3,     // 객체 할당 실패
+    Detected = 101,
+    Confirmed = 102,
+    Aimed = 103,
+    ScanPaused = 104,
+    Firing = 105,
+    FireConfirmed = 106,
+    ScanResumed = 107,
+    ResultConfirmed = 108,
+    ManualAiming = 110,
+    TargetStillPresent = 111
 }
 
 /// <summary>WPF에서 ECS로 보내는 28바이트 요청 구조체</summary>
