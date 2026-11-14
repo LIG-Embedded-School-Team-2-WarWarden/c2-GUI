@@ -15,7 +15,7 @@ static class FrameFreshnessChecks
         public void Advance(int ms, bool wall = true) { Ticks += ms; if (wall) Utc = Utc.AddMilliseconds(ms); }
     }
     static void Check(bool value, string message) { if (!value) throw new Exception(message); }
-    public static void Run(Action<string> stateChanged, Action<SharedFrame> received, Func<int> rowCount, Func<bool> canFire)
+    public static void Run(Action<string> stateChanged, Action<SharedFrame> received, Func<int> rowCount, Func<bool> canAim)
     {
         var name = "Local\\FreshnessTest" + Guid.NewGuid().ToString("N");
         var mutexName = name + "Mutex";
@@ -47,9 +47,9 @@ static class FrameFreshnessChecks
                 view.WriteArray(0, bytes, 0, bytes.Length);
             }
             var stamp = time.Utc.ToUnixTimeMilliseconds();
-            Write(7, stamp, status: 0); Poll(); Check(state.StartsWith("LIVE") && frames == 1 && rowCount() == 1 && canFire(), "fresh assigned frame rejected");
+            Write(7, stamp, status: 0); Poll(); Check(state.StartsWith("LIVE") && frames == 1 && rowCount() == 1 && canAim(), "fresh assigned frame rejected");
             time.Advance(1999); Poll(); Check(state.StartsWith("LIVE") && frames == 1, "fresh duplicate rejected");
-            time.Advance(1); Poll(); Check(!state.StartsWith("LIVE") && rowCount() == 0 && !canFire(), "frozen frame remained live at timeout");
+            time.Advance(1); Poll(); Check(!state.StartsWith("LIVE") && rowCount() == 0 && !canAim(), "frozen frame remained live at timeout");
             time.Advance(13000); Poll(); Check(!state.StartsWith("LIVE") && frames == 1 && rowCount() == 0, "frozen frame revived");
             // First read of an old mapping must also fail; new sequence alone is insufficient.
             Write(8, stamp); Poll(); Check(!state.StartsWith("LIVE") && frames == 1, "old header accepted");

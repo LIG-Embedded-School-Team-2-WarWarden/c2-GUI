@@ -47,19 +47,15 @@ internal sealed class CameraMapOverlay : FrameworkElement
         double minimum, double maximum, double capture, double heading, double horizontalFov)
     {
         dc.PushClip(new RectangleGeometry(bounds));
-        if (fcs is Point camera)
-        {
-            dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(65, 239, 197, 60)), null, camera, capture, capture);
-            dc.DrawEllipse(null, new Pen(new SolidColorBrush(Color.FromRgb(215, 184, 83)), 1.2), camera, capture, capture);
-        }
         var visible = new CombinedGeometry(GeometryCombineMode.Exclude,
             Sector(rdr, maximum, heading, horizontalFov), new EllipseGeometry(rdr, minimum, minimum));
         dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(36, 0, 230, 138)),
             new Pen(new SolidColorBrush(Color.FromArgb(185, 0, 230, 138)), 1), visible);
-        dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(95, 238, 68, 82)),
-            new Pen(new SolidColorBrush(Color.FromArgb(150, 238, 90, 100)), 1), rdr, minimum, minimum);
+        dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(95, 239, 156, 60)),
+            new Pen(new SolidColorBrush(Color.FromArgb(185, 239, 156, 60)), 1), rdr, minimum, minimum);
         var boundary = new Pen(new SolidColorBrush(Color.FromRgb(74, 179, 190)), 1.2) { DashStyle = new DashStyle(new double[] { 4, 3 }, 0) };
-        dc.DrawEllipse(null, boundary, rdr, maximum, maximum);
+        if (fcs is Point fcsCenter)
+            dc.DrawEllipse(null, boundary, fcsCenter, capture, capture);
         dc.DrawLine(new Pen(new SolidColorBrush(Color.FromRgb(0, 230, 138)), 1.5),
             rdr, At(rdr, maximum, heading));
         dc.Pop();

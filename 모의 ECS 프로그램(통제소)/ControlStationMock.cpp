@@ -47,15 +47,46 @@ namespace
     std::uint32_t g_targetId = 0;
     std::uint32_t g_fcsId = 1;
     AssignmentState g_assignment = AssignmentState::Idle;
+    bool IsManualScanPaused()
+    {
+        return g_assignment == AssignmentState::ScanPaused || g_assignment == AssignmentState::Firing ||
+            g_assignment == AssignmentState::FireConfirmed;
+    }
     std::uint32_t g_fireState = 0;
     bool g_laserOn = false;
     std::chrono::steady_clock::time_point g_laserOffAt{};
     std::chrono::steady_clock::time_point g_fcsBusyUntil{};
     std::array<bool, kMaxTargets> g_targetKilled{};
+    std::array<bool, kMaxTargets> g_targetRemoved{};
+    enum class ShotMode { Automatic, Hit, Miss };
+    ShotMode g_shotMode = ShotMode::Automatic;
+    std::array<bool, kMaxTargets> g_hasCompletedShot{};
+    bool g_currentShotHits = false;
+    std::uint32_t g_observationRound = 0;
     std::array<float, kMaxTargets> g_targetX{};
     std::array<float, kMaxTargets> g_targetY{};
-    float g_rdrX = -0.5f, g_rdrY = 0.0f, g_rdrZ = 0.0f;
-    float g_fcsX = 0.5f, g_fcsY = 0.0f, g_fcsZ = 0.0f;
+    constexpr float kInitialRdrX = 1.0f;
+    constexpr float kInitialFcsX = -1.0f;
+    constexpr float kInitialRdrBlindRadius = 2.2f;
+    constexpr float kInitialRdrMaxRange = 10.0f;
+    // The outermost fixed target is at most 9.5 m + the 2 m installation offset from FCS in plan view.
+    constexpr float kInitialFcsMaxRange = 12.0f;
+    float g_rdrX = kInitialRdrX, g_rdrY = 0.0f, g_rdrZ = 0.0f;
+    float g_fcsX = kInitialFcsX, g_fcsY = 0.0f, g_fcsZ = 0.0f;
+    std::array<std::array<float, 3>, 4> g_cameraSettings{{
+        {{kInitialRdrX, 0.0f, 0.0f}},
+        {{kInitialFcsX, 0.0f, 0.0f}},
+        {{kInitialRdrBlindRadius, kInitialRdrMaxRange, kInitialFcsMaxRange}},
+        {{120.0f, 45.0f, 0.0f}}
+    }};
+
+    std::uint32_t FloatBits(float value)
+    {
+        std::uint32_t bits{};
+        static_assert(sizeof(bits) == sizeof(value));
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits;
+    }
 
     void CompleteAdjustmentIfAligned();
 
@@ -85,21 +116,21 @@ namespace
         return 5.3f + std::fmod(static_cast<float>(index) * 4.7f, 45.0f);
     }
 
-    double TargetDistance(std::uint32_t targetId)
+    double TargetHorizontalDistance(std::uint32_t targetId)
     {
-        return 1.2 + static_cast<double>(targetId - 1001) * 0.12;
+        return 5.0 + static_cast<double>(targetId - 1001) * 0.5;
     }
 
     double TargetPositionX(std::uint32_t targetId)
     {
         const auto bearing = (TargetAzimuth(targetId) - 135) * 3.14159265358979323846 / 180.0;
-        return g_rdrX + std::sin(bearing) * TargetDistance(targetId);
+        return g_rdrX + std::sin(bearing) * TargetHorizontalDistance(targetId);
     }
 
     double TargetPositionY(std::uint32_t targetId)
     {
         const auto bearing = (TargetAzimuth(targetId) - 135) * 3.14159265358979323846 / 180.0;
-        return g_rdrY + std::cos(bearing) * TargetDistance(targetId);
+        return g_rdrY + std::cos(bearing) * TargetHorizontalDistance(targetId);
     }
 
     float TargetAzimuthFromFcs(std::uint32_t targetId)
@@ -150,12 +181,15 @@ namespace
             target.targetId = 1001 + i;
             target.azimuthDeg = TargetAzimuth(target.targetId);
             target.elevationDeg = TargetElevation(target.targetId);
-            target.distanceM = 250.0f + static_cast<float>(i) * 95.0f;
+            const auto horizontalDistance = TargetHorizontalDistance(target.targetId);
+            const auto elevationRadians = target.elevationDeg * 3.14159265358979323846 / 180.0;
+            const auto height = std::tan(elevationRadians) * horizontalDistance;
+            target.distanceM = static_cast<float>(std::hypot(horizontalDistance, height));
             target.lidarX = static_cast<float>(TargetPositionX(target.targetId));
             target.lidarY = static_cast<float>(TargetPositionY(target.targetId));
             g_targetX[i] = target.lidarX;
             g_targetY[i] = target.lidarY;
-            target.lidarZ = 8.0f + static_cast<float>(i) * 2.0f;
+            target.lidarZ = static_cast<float>(g_rdrZ + height);
             target.rdrId = 1;
             target.status = kTargetAlive;
             target.valid = 1;
@@ -230,6 +264,7 @@ namespace
 
         Frame frame{};
         InitializeFramePayload(frame.payload);
+        const auto fixedTargets = frame.payload;
         std::uint32_t sequence = 0;
         Print(L"[공유 메모리] 송신 시작. 고정 객체 10개, 갱신 주기 100ms");
 
@@ -247,6 +282,8 @@ namespace
             frame.header.timestampMs = UnixMs();
             frame.header.payloadSize = static_cast<std::uint32_t>(sizeof(Payload));
 
+            std::uint32_t resultRound = 0;
+            std::uint32_t resultTargetId = 0;
             // 네임드 파이프 명령으로 변경된 자산 상태를 공유 메모리에도 반영
             {
                 std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -254,17 +291,24 @@ namespace
                 if (g_laserOn && std::chrono::steady_clock::now() >= g_laserOffAt)
                 {
                     g_laserOn = false;
+                    if (g_assignment == AssignmentState::Firing)
+                    {
+                        g_fireState = 1;
+                        g_hasCompletedShot[g_targetId - 1001] = true;
+                        g_assignment = AssignmentState::FireConfirmed;
+                    }
                     Print(L"[교전] 5초 경과로 레이저 OFF");
                 }
 
+                frame.payload.rdrAssets[0].isEnabled = IsManualScanPaused() ? 0u : 1u;
                 frame.payload.rdrAssets[0].isConnected = g_connected ? 1u : 0u;
                 frame.payload.rdrAssets[0].isOperating = g_rdrOperating ? 1u : 0u;
-                frame.payload.targetCount = kMaxTargets;
+                frame.payload.targetCount = 0;
                 frame.payload.rdrAssets[0].positionX = g_rdrX;
                 frame.payload.rdrAssets[0].positionY = g_rdrY;
                 frame.payload.rdrAssets[0].positionZ = g_rdrZ;
                 // 모의 RDR는 화면의 -135~+135도 범위를 10도/초로 왕복 주사
-                if (g_rdrOperating)
+                if (g_rdrOperating && !IsManualScanPaused())
                 {
                     mockRdrAzimuth += mockRdrDirection;
                     if (mockRdrAzimuth >= 270.0f || mockRdrAzimuth <= 0.0f)
@@ -274,14 +318,15 @@ namespace
                     }
                 }
                 frame.payload.rdrAssets[0].azimuthDeg = mockRdrAzimuth;
-                if (g_connected)
+                if (g_connected && !IsManualScanPaused())
                     g_rdrElevationDeg = MoveToward(g_rdrElevationDeg, g_rdrElevationTargetDeg, 2.5f); // 100ms당 최대 2.5도, 25도/초
                 frame.payload.rdrAssets[0].elevationDeg = g_rdrElevationDeg;
                 frame.payload.fcsAssets[0].isConnected = g_connected ? 1u : 0u;
                 frame.payload.fcsAssets[0].positionX = g_fcsX;
                 frame.payload.fcsAssets[0].positionY = g_fcsY;
                 frame.payload.fcsAssets[0].positionZ = g_fcsZ;
-                if (g_connected && g_available && g_assignment == AssignmentState::Adjusting)
+                if (g_connected && g_available &&
+                    (g_assignment == AssignmentState::Adjusting || g_assignment == AssignmentState::ManualAiming))
                 {
                     g_fcsAzimuthDeg = MoveTowardAzimuth(g_fcsAzimuthDeg, g_fcsTargetAzimuthDeg, 2.5f); // 100ms당 최대 2.5도
                     g_fcsElevationDeg = MoveToward(g_fcsElevationDeg, g_fcsTargetElevationDeg, 2.5f); // 100ms당 최대 2.5도, 25도/초
@@ -297,7 +342,19 @@ namespace
                 // 격추 처리된 객체는 이후 프레임에서도 격추 상태를 유지
                 for (std::uint32_t i = 0; i < kMaxTargets; ++i)
                 {
-                    frame.payload.targets[i].status = g_targetKilled[i] ? kTargetDead : kTargetAlive;
+                    if (g_targetRemoved[i]) continue;
+                    auto& target = frame.payload.targets[frame.payload.targetCount++];
+                    target = fixedTargets.targets[i];
+                    const bool observationPaused = IsManualScanPaused() && !g_targetKilled[i];
+                    target.status = g_targetKilled[i] ? kTargetDead : observationPaused ? kTargetObservationPaused : kTargetAlive;
+                    target.valid = observationPaused ? 0 : 1;
+                }
+                for (auto i = frame.payload.targetCount; i < kMaxTargets; ++i)
+                    frame.payload.targets[i] = {};
+                if (g_assignment == AssignmentState::ScanResumed && g_connected && g_rdrOperating)
+                {
+                    resultRound = g_observationRound;
+                    resultTargetId = g_targetId;
                 }
             }
 
@@ -312,6 +369,27 @@ namespace
                 std::memcpy(view, &frame, sizeof(frame));
                 MemoryBarrier();
                 ReleaseMutex(mutex);
+                if (resultTargetId != 0)
+                {
+                    const auto* begin = frame.payload.targets;
+                    const auto* end = begin + frame.payload.targetCount;
+                    std::lock_guard<std::mutex> lock(g_stateMutex);
+                    if (g_assignment == AssignmentState::ScanResumed && resultRound == g_observationRound && g_connected && g_rdrOperating)
+                    {
+                        const bool targetObserved = std::any_of(begin, end, [resultTargetId](const Target& target)
+                        {
+                            return target.targetId == resultTargetId;
+                        });
+                        g_assignment = targetObserved ? AssignmentState::TargetStillPresent : AssignmentState::ResultConfirmed;
+                        if (!targetObserved)
+                        {
+                            // Publish the confirmed hit as a result row after checking absence.
+                            const auto index = resultTargetId - 1001;
+                            g_targetKilled[index] = true;
+                            g_targetRemoved[index] = false;
+                        }
+                    }
+                }
             }
             else
             {
@@ -351,6 +429,18 @@ namespace
         case CommandType::SetRdrElevation: return L"RDR 고각 설정";
         case CommandType::SetRdrOperating: return L"라이다 구동 상태 설정";
         case CommandType::GetFcsBusy: return L"FCS 작업 상태 조회";
+        case CommandType::GetCameraSettings: return L"장비 설정 조회";
+        case CommandType::SetCameraSettings: return L"장비 설정 저장";
+        case CommandType::GetRdrStartupStatus: return L"라이다 구동 상태 확인";
+        case CommandType::RegisterManualTarget: return L"수동 절차 객체 등록";
+        case CommandType::ConfirmManualAssignment: return L"수동 할당";
+        case CommandType::StartManualAim: return L"수동 조준";
+        case CommandType::PauseManualScan: return L"조사 중지";
+        case CommandType::StartManualFire: return L"모의 발사";
+        case CommandType::ConfirmManualFire: return L"발사 완료 확인";
+        case CommandType::ResumeManualScan: return L"조사 재개";
+        case CommandType::ConfirmManualResult: return L"결과 확인";
+        case CommandType::RetryManualAssignment: return L"다시 시도";
         default: return L"알 수 없는 명령";
         }
     }
@@ -380,6 +470,16 @@ namespace
         case AssignmentState::Adjusting: return L"방향 조정 중";
         case AssignmentState::Assigned: return L"할당 완료";
         case AssignmentState::Failed: return L"할당 실패";
+        case AssignmentState::Detected: return L"탐지 완료";
+        case AssignmentState::Confirmed: return L"수동 할당 완료";
+        case AssignmentState::ManualAiming: return L"수동 조준 중";
+        case AssignmentState::Aimed: return L"조준 완료";
+        case AssignmentState::ScanPaused: return L"조사 중지";
+        case AssignmentState::Firing: return L"모의 발사 요청 완료";
+        case AssignmentState::FireConfirmed: return L"발사 완료 확인";
+        case AssignmentState::ScanResumed: return L"조사 재개";
+        case AssignmentState::ResultConfirmed: return L"결과 확인";
+        case AssignmentState::TargetStillPresent: return L"객체 유지";
         default: return L"알 수 없는 상태";
         }
     }
@@ -419,12 +519,12 @@ namespace
     {
         std::lock_guard<std::mutex> lock(g_stateMutex);
         const float azimuthError = std::fabs(std::fmod(g_fcsAzimuthDeg - g_fcsTargetAzimuthDeg + 540.0f, 360.0f) - 180.0f);
-        if (g_assignment != AssignmentState::Adjusting || azimuthError > 0.05f ||
+        if ((g_assignment != AssignmentState::Adjusting && g_assignment != AssignmentState::ManualAiming) || azimuthError > 0.05f ||
             std::fabs(g_fcsElevationDeg - g_fcsTargetElevationDeg) > 0.05f)
             return;
 
-        g_assignment = AssignmentState::Assigned;
-        Print(L"[상태] FCS 방위각/고각 목표 도달. 객체 할당 완료");
+        g_assignment = g_assignment == AssignmentState::ManualAiming ? AssignmentState::Aimed : AssignmentState::Assigned;
+        Print(L"[상태] FCS 방위각/고각 목표 도달");
     }
 
     // WPF 명령을 검증하고 모의 응답 생성
@@ -436,13 +536,26 @@ namespace
         const auto type = static_cast<CommandType>(command.commandType);
         const auto now = std::chrono::steady_clock::now();
         const bool fcsBusy = now < g_fcsBusyUntil;
+        const bool manualCommand = type >= CommandType::RegisterManualTarget && type <= CommandType::RetryManualAssignment;
 
+        const bool setAssetPosition = type == CommandType::SetAssetPosition;
+        const bool cameraSettings = type == CommandType::GetCameraSettings || type == CommandType::SetCameraSettings;
+        const bool validIds = setAssetPosition
+            ? ((command.rdrId == 1 && command.fcsId == 0) || (command.rdrId == 0 && command.fcsId == 1))
+            : cameraSettings ? (command.rdrId == 0 && command.fcsId == 0)
+            : type == CommandType::GetRdrStartupStatus ? true
+            : (command.rdrId != 0 && command.fcsId != 0);
         if (command.magic != kPipeMagic || command.version != kPipeVersion ||
-            command.requestId == 0 || (command.commandType == static_cast<std::uint32_t>(CommandType::SetAssetPosition) ? (command.rdrId == 0) == (command.fcsId == 0) : (command.rdrId == 0 || command.fcsId == 0)))
+            command.requestId == 0 || !validIds)
         {
             result = ResultCode::InvalidRequest;
         }
-        else if (type > CommandType::GetFcsBusy)
+        else if (type != CommandType::GetStatus && type != CommandType::AssignTarget &&
+                 type != CommandType::CancelAssignment && type != CommandType::Fire &&
+                 type != CommandType::SetRdrElevation && type != CommandType::SetAssetPosition &&
+                 type != CommandType::SetRdrOperating && type != CommandType::GetFcsBusy &&
+                 type != CommandType::GetCameraSettings && type != CommandType::SetCameraSettings &&
+                 type != CommandType::GetRdrStartupStatus && !manualCommand)
         {
             result = ResultCode::NotSupported;
         }
@@ -457,6 +570,28 @@ namespace
                 if (command.rdrId != 1 || command.fcsId != 1) result = ResultCode::InvalidRequest;
                 else if (!g_connected) result = ResultCode::AssetUnavailable;
                 else if (!g_available) result = ResultCode::DeviceError;
+                break;
+
+            case CommandType::GetRdrStartupStatus:
+                if (!g_connected) result = ResultCode::LidarDisconnected;
+                else if (!g_rdrOperating) result = ResultCode::RdrStartUnconfirmed;
+                break;
+
+            case CommandType::GetCameraSettings:
+                if (command.targetId >= g_cameraSettings.size()) result = ResultCode::InvalidRequest;
+                break;
+
+            case CommandType::SetCameraSettings:
+                if (command.targetId >= g_cameraSettings.size() ||
+                    !std::isfinite(command.positionX) || !std::isfinite(command.positionY) || !std::isfinite(command.positionZ))
+                    result = ResultCode::InvalidRequest;
+                else
+                {
+                    auto& values = g_cameraSettings[command.targetId];
+                    values = { command.positionX, command.positionY, command.positionZ };
+                    if (command.targetId == 0) { g_rdrX = command.positionX; g_rdrY = command.positionY; g_rdrZ = command.positionZ; }
+                    else if (command.targetId == 1) { g_fcsX = command.positionX; g_fcsY = command.positionY; g_fcsZ = command.positionZ; }
+                }
                 break;
 
             case CommandType::SetRdrElevation:
@@ -474,13 +609,14 @@ namespace
             case CommandType::SetRdrOperating:
                 if (!g_connected) result = ResultCode::AssetUnavailable;
                 else if (command.rdrId != 1 || command.targetId > 1) result = ResultCode::InvalidRequest;
+                else if (IsManualScanPaused()) result = ResultCode::LidarBusy;
                 else { g_rdrOperating = command.targetId == 1; Print(g_rdrOperating ? L"[RDR] 라이다 구동" : L"[RDR] 라이다 정지"); }
                 break;
 
             case CommandType::SetAssetPosition:
                 if (!g_connected) result = ResultCode::AssetUnavailable;
-                else if (command.rdrId == 1 && command.fcsId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_rdrX=command.positionX; g_rdrY=command.positionY; g_rdrZ=command.positionZ; }
-                else if (command.fcsId == 1 && command.rdrId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_fcsX=command.positionX; g_fcsY=command.positionY; g_fcsZ=command.positionZ; }
+                else if (command.rdrId == 1 && command.fcsId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_rdrX=command.positionX; g_rdrY=command.positionY; g_rdrZ=command.positionZ; g_cameraSettings[0] = { g_rdrX, g_rdrY, g_rdrZ }; }
+                else if (command.fcsId == 1 && command.rdrId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_fcsX=command.positionX; g_fcsY=command.positionY; g_fcsZ=command.positionZ; g_cameraSettings[1] = { g_fcsX, g_fcsY, g_fcsZ }; }
                 else result = ResultCode::InvalidRequest;
                 break;
 
@@ -489,8 +625,7 @@ namespace
                     result = ResultCode::AssetUnavailable;
                 else if (command.targetId < 1001 || command.targetId > 1010)
                     result = ResultCode::InvalidRequest;
-                else if (g_assignment == AssignmentState::Adjusting ||
-                         g_assignment == AssignmentState::Assigned)
+                else if (g_assignment != AssignmentState::Idle && g_assignment != AssignmentState::Failed)
                     result = ResultCode::AlreadyAssigned;
                 else
                 {
@@ -503,8 +638,83 @@ namespace
                 }
                 break;
 
+            case CommandType::RegisterManualTarget:
+                if (command.rdrId != 1 || command.fcsId != 1 ||
+                    command.targetId < 1001 || command.targetId >= 1001 + kMaxTargets)
+                    result = ResultCode::InvalidRequest;
+                else if (!g_connected || !g_available || !g_rdrOperating || fcsBusy)
+                    result = ResultCode::AssetUnavailable;
+                else if (g_targetId != 0)
+                    result = ResultCode::AlreadyAssigned;
+                else if (g_targetKilled[command.targetId - 1001] || g_targetRemoved[command.targetId - 1001])
+                    result = ResultCode::InvalidRequest;
+                else
+                {
+                    g_targetId = command.targetId;
+                    g_fcsId = command.fcsId;
+                    g_assignment = AssignmentState::Confirmed;
+                    g_fireState = 0;
+                }
+                break;
+
+            case CommandType::ConfirmManualAssignment:
+            case CommandType::StartManualAim:
+            case CommandType::PauseManualScan:
+            case CommandType::StartManualFire:
+            case CommandType::ConfirmManualFire:
+            case CommandType::ResumeManualScan:
+            case CommandType::ConfirmManualResult:
+            case CommandType::RetryManualAssignment:
+            {
+                const auto step = static_cast<std::uint32_t>(type) - 1000;
+                const auto previous = type == CommandType::RetryManualAssignment
+                    ? AssignmentState::TargetStillPresent : static_cast<AssignmentState>(100 + step - 1);
+                if (command.rdrId != 1 || command.fcsId != g_fcsId || command.targetId == 0 || command.targetId != g_targetId)
+                    result = ResultCode::NotAssigned;
+                else if (!g_connected || !g_available)
+                    result = ResultCode::AssetUnavailable;
+                else if (g_assignment != previous)
+                    result = ResultCode::InvalidRequest;
+                else if (step == 2 || step == 6 || step == 8)
+                    result = ResultCode::NotSupported;
+                else if (step == 5 && fcsBusy)
+                    result = ResultCode::StatusPending;
+                else if ((step == 4 || step == 5) && !g_rdrOperating)
+                    result = ResultCode::AssetUnavailable;
+                else if (type == CommandType::RetryManualAssignment)
+                {
+                    g_assignment = AssignmentState::Confirmed;
+                    g_fireState = 0;
+                }
+                else if (step == 3)
+                {
+                    g_fcsTargetAzimuthDeg = TargetAzimuthFromFcs(g_targetId);
+                    g_fcsTargetElevationDeg = TargetElevation(g_targetId);
+                    g_assignment = AssignmentState::ManualAiming;
+                }
+                else
+                {
+                    g_assignment = static_cast<AssignmentState>(100 + step);
+                    if (step == 5)
+                    {
+                        g_currentShotHits = g_shotMode == ShotMode::Hit ||
+                            (g_shotMode == ShotMode::Automatic && (g_targetId < 1005 || g_hasCompletedShot[g_targetId - 1001]));
+                        g_laserOn = true;
+                        g_laserOffAt = now + std::chrono::seconds(5);
+                        g_fcsBusyUntil = g_laserOffAt + std::chrono::seconds(2);
+                    }
+                    else if (step == 7)
+                    {
+                        if (g_currentShotHits) g_targetRemoved[g_targetId - 1001] = true;
+                        ++g_observationRound;
+                    }
+                }
+                break;
+            }
+
             case CommandType::CancelAssignment:
-                if (g_assignment == AssignmentState::Idle)
+                if (g_assignment == AssignmentState::Idle || command.fcsId != g_fcsId ||
+                    (command.targetId != 0 && command.targetId != g_targetId))
                     result = ResultCode::NotAssigned;
                 else
                 {
@@ -512,6 +722,7 @@ namespace
                     g_fcsId = command.fcsId;
                     g_assignment = AssignmentState::Idle;
                     g_fireState = 0;
+                    g_laserOn = false;
                     g_fcsTargetAzimuthDeg = g_fcsAzimuthDeg;
                     g_fcsTargetElevationDeg = g_fcsElevationDeg;
                 }
@@ -544,13 +755,21 @@ namespace
             }
         }
 
-        return PipeResponse{
+        PipeResponse response{
             kPipeMagic, kPipeVersion, command.requestId, command.commandType,
             static_cast<std::uint32_t>(result), g_fcsId, g_targetId,
             static_cast<std::uint32_t>(g_assignment),
             type == CommandType::GetFcsBusy ? (result == ResultCode::Success && fcsBusy ? 1u : 0u) : g_fireState,
             g_connected ? 1u : 0u
         };
+        if (type == CommandType::GetCameraSettings && result == ResultCode::Success)
+        {
+            const auto& values = g_cameraSettings[command.targetId];
+            response.fcsId = FloatBits(values[0]);
+            response.assignedTargetId = FloatBits(values[1]);
+            response.assignmentState = FloatBits(values[2]);
+        }
+        return response;
     }
 
     // 수신한 명령과 생성한 응답을 한글로 출력
@@ -641,6 +860,7 @@ namespace
         std::lock_guard<std::mutex> lock(g_stateMutex);
         g_connected = true;
         g_available = true;
+        g_rdrOperating = false;
         g_rdrElevationDeg = 0;
         g_rdrElevationTargetDeg = 0;
         g_fcsAzimuthDeg = 135;
@@ -655,6 +875,9 @@ namespace
         g_laserOffAt = {};
         g_fcsBusyUntil = {};
         g_targetKilled.fill(false);
+        g_targetRemoved.fill(false);
+        g_shotMode = ShotMode::Automatic;
+        g_hasCompletedShot.fill(false);
     }
 
     // 콘솔 입력값을 연결/사용 가능 상태로 변환
@@ -675,9 +898,9 @@ int wmain()
     std::wcout
         << L"ECS 통제소 모의 프로그램\n"
         << L"공유 메모리: Local\\ControlStationMock.SharedMemory.v3\n"
-        << L"네임드 파이프: \\\\.\\pipe\\ECS_NamedPipe | 프로토콜 버전 2\n"
+        << L"네임드 파이프: \\\\.\\pipe\\ECS_NamedPipe | 프로토콜 버전 3\n"
         << L"고정 객체: 10개(1001~1010) | 갱신 주기: 100ms | 모터: AZ 25°/s, EL 25°/s\n"
-        << L"명령어: help, status, connected on|off, available on|off, reset, quit\n";
+        << L"명령어: help, status, connected on|off, available on|off, shot auto|hit|miss, reset, quit\n";
 
     std::thread shmThread(SharedMemoryLoop);
     std::thread pipeThread(NamedPipeServerLoop);
@@ -691,9 +914,20 @@ int wmain()
         tokens >> command >> value;
 
         if (command == L"help")
-            Print(L"명령어: status | connected on|off | available on|off | reset | quit");
+            Print(L"명령어: status | connected on|off | available on|off | shot auto|hit|miss | reset | quit");
         else if (command == L"status")
             PrintState();
+        else if (command == L"shot")
+        {
+            if (value != L"auto" && value != L"hit" && value != L"miss")
+                Print(L"사용법: shot auto|hit|miss");
+            else
+            {
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                g_shotMode = value == L"hit" ? ShotMode::Hit : value == L"miss" ? ShotMode::Miss : ShotMode::Automatic;
+                Print(L"[모의 상태] 발사 모드: " + value);
+            }
+        }
         else if (command == L"connected" || command == L"available")
         {
             bool enabled = false;

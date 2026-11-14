@@ -36,8 +36,8 @@ ControlStationMock.exe
 - 공유 메모리는 100ms마다 갱신하며 모의 RDR 방위각은 100ms마다 2도(초당 20도)씩 0~270도 왕복
 
 공유 메모리
-- 이름: Local\ControlStationMock.SharedMemory.v2
-- 뮤텍스: Local\ControlStationMock.SharedMemory.Mutex.v2
+- 이름: Local\ControlStationMock.SharedMemory.v3
+- 뮤텍스: Local\ControlStationMock.SharedMemory.Mutex.v3
 - 프레임 크기: 492바이트 (프로토콜 버전 3)
 - RDRAsset: 40바이트 (각도 float, 위치 X/Y/Z 및 전체 시야각, 위치 단위 m)
 - FCSAsset: 40바이트 (각도 float, 위치 X/Y/Z, 위치 단위 m)
@@ -71,6 +71,8 @@ WPF 자산 좌표 편집
 - RDR/FCS의 X/Y/Z 좌표 변경은 SetAssetPosition 파이프 명령으로 모의 ECS에 전달
 - 모의 ECS는 변경된 좌표를 보존해 다음 공유 메모리 프레임에 전송
 - RDR/FCS와 객체 방위각·고각은 float로 송신되며 화면에는 소수점 한 자리까지 표시; FCS 방위각은 0~360도 전체 회전 지원
+- 장비 설정 조회/저장 명령(8/9)은 RDR/FCS 설치 위치, 인식·shoot 거리, 시야각을 처리
+- 라이다 구동 상태 조회 명령(18)은 구동 상태를 응답
 
 RDR 작동 상태
 - 모의 ECS 시작 시 RDR은 비활성 상태로 시작

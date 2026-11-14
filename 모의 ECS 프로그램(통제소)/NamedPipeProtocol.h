@@ -29,7 +29,19 @@ enum class CommandType : std::uint32_t
     SetRdrElevation = 4, // RDR 고각 설정, targetId는 0.1도 단위
     SetAssetPosition = 5, // RDR/FCS 좌표 설정
     SetRdrOperating = 6, // RDR 동작 상태 설정
-    GetFcsBusy = 7      // 성공 응답의 fireState: 1=작업 중, 0=작업 종료
+    GetFcsBusy = 7,      // 성공 응답의 fireState: 1=작업 중, 0=작업 종료
+    GetCameraSettings = 8, // targetId: 설정 그룹(0~3), 좌표값은 응답에 float 비트로 반환
+    SetCameraSettings = 9, // targetId: 설정 그룹(0~3), 좌표값은 float
+    GetRdrStartupStatus = 18, // 라이다 구동 준비 상태 조회
+    RegisterManualTarget = 1001,
+    ConfirmManualAssignment = 1002,
+    StartManualAim = 1003,
+    PauseManualScan = 1004,
+    StartManualFire = 1005,
+    ConfirmManualFire = 1006,
+    ResumeManualScan = 1007,
+    ConfirmManualResult = 1008,
+    RetryManualAssignment = 1009
 };
 
 
@@ -45,7 +57,18 @@ enum class ResultCode : std::uint32_t
     NotAssigned = 3,      // 할당된 객체가 없음
     AlreadyAssigned = 4,  // 이미 객체가 할당되어 있음
     NotSupported = 5,     // 지원하지 않는 명령
-    DeviceError = 6       // 모의 장치 처리 오류
+    DeviceError = 6,      // 모의 장치 처리 오류
+    StatusPending = 7,    // 장비 상태 확인 대기
+    DeviceFault = 10,
+    LidarUnsupported = 15,
+    LidarUnknown = 16,
+    LidarRecoveryRequired = 17,
+    LidarStopUnconfirmed = 18,
+    LidarDisconnected = 19,
+    LidarBusy = 20,
+    LidarResumeUnconfirmed = 21,
+    FcsOffUnconfirmed = 22,
+    RdrStartUnconfirmed = 23
 };
 
 
@@ -58,7 +81,17 @@ enum class AssignmentState : std::uint32_t
     Idle = 0,       // 할당된 객체가 없음
     Adjusting = 1,  // 객체 방향 조정 모의 진행 중
     Assigned = 2,   // 객체 할당 완료
-    Failed = 3      // 객체 할당 실패
+    Failed = 3,     // 객체 할당 실패
+    Detected = 101,
+    Confirmed = 102,
+    Aimed = 103,
+    ScanPaused = 104,
+    Firing = 105,
+    FireConfirmed = 106,
+    ScanResumed = 107,
+    ResultConfirmed = 108,
+    ManualAiming = 110,
+    TargetStillPresent = 111
 };
 
 
