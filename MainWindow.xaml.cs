@@ -86,10 +86,10 @@ public partial class MainWindow : Window
             RefreshAssignments();
         });
         _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
-        Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); };
+        Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
         Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
         _clock.Tick += (_, _) => UpdateClock();
-        _commandStatusTimer.Tick += async (_, _) => await RefreshCommandStatusAsync();
+        _commandStatusTimer.Tick += async (_, _) => { await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
         _rdrElevationSendTimer.Tick += async (_, _) =>
         {
             _rdrElevationSendTimer.Stop();
@@ -283,14 +283,42 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool _rdrStartupPolling;
+    private async Task RefreshRdrStartupAsync()
+    {
+        if (_requestedRdrOperating != true || _rdrStartupPolling) return;
+        _rdrStartupPolling = true;
+        try
+        {
+            var response = await _pipeClient.SendAsync(CommandType.GetRdrStartupStatus);
+            var result = (ResultCode)response.ResultCode;
+            if (result == ResultCode.StatusPending) return;
+            _requestedRdrOperating = null;
+            if (result == ResultCode.Success) AddLog("RDR 구동 완료 · 라이다 방출 재개 확인");
+            else
+            {
+                var message = CommandResultText(result);
+                AddLog($"RDR 구동 실패 · {message}");
+                ShowAlert(message, "RDR 구동 실패");
+            }
+        }
+        catch (Exception ex)
+        {
+            _requestedRdrOperating = null;
+            AddLog($"RDR 구동 상태 확인 실패 · {ex.Message}");
+            ShowAlert("ECS 연결을 확인해 주세요. 구동 완료 여부를 확인하지 못했습니다.", "RDR 상태 확인 실패");
+        }
+        finally { _rdrStartupPolling = false; UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset); }
+    }
+
     private void UpdateRdrOperatingControl(RdrAsset? rdr)
     {
         if (RdrOperatingToggleButton is null) return;
-        if (rdr is not null && _requestedRdrOperating == rdr.IsOperating)
+        if (rdr is not null && _requestedRdrOperating == false && !rdr.IsOperating)
             _requestedRdrOperating = null;
         var sharedMemoryAvailable = _isSharedMemoryLive;
         var rdrOperating = sharedMemoryAvailable && rdr?.IsOperating == true;
-        RdrOperatingToggleButton.Content = rdrOperating ? "라이다 정지" : "라이다 구동";
+        RdrOperatingToggleButton.Content = _requestedRdrOperating == true ? "라이다 구동 확인 중" : rdrOperating ? "라이다 정지" : "라이다 구동";
         RdrOperatingToggleButton.Background = sharedMemoryAvailable ? new SolidColorBrush(Color.FromRgb(13, 91, 61)) : new SolidColorBrush(Color.FromRgb(169, 21, 40));
         RdrOperatingToggleButton.Foreground = Brushes.White;
         RdrOperatingToggleButton.BorderBrush = sharedMemoryAvailable ? new SolidColorBrush(Color.FromRgb(0, 230, 138)) : new SolidColorBrush(Color.FromRgb(255, 82, 99));
@@ -417,8 +445,8 @@ public partial class MainWindow : Window
 
     private async void RdrPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(true);
     private async void FcsPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(false);
-    private void RdrPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(RdrPositionEditor, RdrPositionToggleButton, "RDR 위치 수정", "RDR 위치 접기");
-    private void FcsPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(FcsPositionEditor, FcsPositionToggleButton, "FCS 위치 수정", "FCS 위치 접기");
+    private void RdrPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(RdrPositionEditor, RdrPositionToggleButton, "RDR 영점 보정 (m)", "RDR 영점 보정 접기");
+    private void FcsPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(FcsPositionEditor, FcsPositionToggleButton, "FCS 영점 보정 (m)", "FCS 영점 보정 접기");
 
     private static void TogglePositionEditor(Border editor, Button button, string openText, string closeText)
     {
@@ -466,12 +494,13 @@ public partial class MainWindow : Window
         }
         try
         {
-            var response = await _pipeClient.SendAsync(CommandType.SetAssetPosition, rdrId: isRdr ? rdr!.Id : 0, fcsId: isRdr ? 0 : fcs!.Id,
+            var response = await _pipeClient.SendAsync(CommandType.SetCameraSettings, targetId: isRdr ? 0u : 1u, rdrId: 0, fcsId: 0,
                 positionX: x, positionY: y, positionZ: z);
             if ((ResultCode)response.ResultCode != ResultCode.Success)
                 throw new IOException(CommandResultText((ResultCode)response.ResultCode));
             if (isRdr) _rdrPositionDirty = false; else _fcsPositionDirty = false;
-            AddLog($"{(isRdr ? "RDR" : "FCS")} 좌표 변경 · X={x:0.###}, Y={y:0.###}, Z={z:0.###} m");
+            await RefreshCameraSettingsAsync();
+            AddLog($"{(isRdr ? "RDR" : "FCS")} 영점 보정 저장 · X={x:0.###}, Y={y:0.###}, Z={z:0.###} m");
         }
         catch (Exception ex) { ShowAlert($"좌표 적용에 실패했습니다: {ex.Message}", "좌표 적용 실패"); }
     }
@@ -496,7 +525,6 @@ public partial class MainWindow : Window
         RdrIdText.Text = rdr.DisplayName;
         RdrEnabledText.Text = YesNo(rdr.IsEnabled); RdrOperatingText.Text = YesNo(rdr.IsOperating); RdrConnectedText.Text = YesNo(rdr.IsConnected);
         RdrAzText.Text = $"{rdr.AzimuthDeg:0.0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0.0}°";
-        if (!_rdrPositionDirty) { _syncingPositionInputs = true; RdrXInput.Text = rdr.PositionX.ToString("0.###"); RdrYInput.Text = rdr.PositionY.ToString("0.###"); RdrZInput.Text = rdr.PositionZ.ToString("0.###"); _syncingPositionInputs = false; }
         UpdateRdrElevationControl(rdr);
         SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
         RdrOperatingText.Foreground = rdr.IsOperating
@@ -532,7 +560,6 @@ public partial class MainWindow : Window
         FcsEnabledText.Text = YesNo(fcs.IsEnabled); FcsOperatingText.Text = YesNo(fcs.IsOperating); FcsConnectedText.Text = YesNo(fcs.IsConnected);
         FcsLaserText.Text = fcs.LaserOn ? "ON" : "OFF";
         FcsAzText.Text = $"{fcs.AzimuthDeg:0.0}°"; FcsElText.Text = $"{fcs.ElevationDeg:0.0}°";
-        if (!_fcsPositionDirty) { _syncingPositionInputs = true; FcsXInput.Text = fcs.PositionX.ToString("0.###"); FcsYInput.Text = fcs.PositionY.ToString("0.###"); FcsZInput.Text = fcs.PositionZ.ToString("0.###"); _syncingPositionInputs = false; }
         var normalColor = new SolidColorBrush(Color.FromRgb(0, 230, 138));
         SetFcsValueForeground(normalColor);
         FcsLaserText.Foreground = fcs.LaserOn
@@ -556,12 +583,24 @@ public partial class MainWindow : Window
 
         var fcs = FcsSelector.SelectedItem as FcsAsset;
         var targets = _data.Targets.Where(x => (x.Valid != 0 || x.IsObservationWaiting) && x.RdrId == rdr.Id).ToArray();
-        var minX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Min();
-        var maxX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Max();
-        var minY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Min();
-        var maxY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Max();
+        double minX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Min();
+        double maxX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Max();
+        double minY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Min();
+        double maxY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Max();
+        var ranges = _cameraSettings?[2];
+        var fov = _cameraSettings is { Length: > 3 } ? _cameraSettings[3] : null;
+        if (ranges != null)
+        {
+            minX = Math.Min(minX, (double)rdr.PositionX - ranges[1]); maxX = Math.Max(maxX, (double)rdr.PositionX + ranges[1]);
+            minY = Math.Min(minY, (double)rdr.PositionY - ranges[1]); maxY = Math.Max(maxY, (double)rdr.PositionY + ranges[1]);
+            if (fcs != null)
+            {
+                minX = Math.Min(minX, (double)fcs.PositionX - ranges[2]); maxX = Math.Max(maxX, (double)fcs.PositionX + ranges[2]);
+                minY = Math.Min(minY, (double)fcs.PositionY - ranges[2]); maxY = Math.Max(maxY, (double)fcs.PositionY + ranges[2]);
+            }
+        }
         var span = Math.Max(Math.Max(maxX - minX, maxY - minY), 1.0);
-        var padding = (float)Math.Max(span * 0.18, 0.45);
+        var padding = Math.Max(span * 0.10, 0.45);
         minX -= padding; maxX += padding; minY -= padding; maxY += padding;
         var canvasWidth = RadarCanvas.ActualWidth > 20 ? RadarCanvas.ActualWidth : double.IsFinite(RadarCanvas.Width) ? RadarCanvas.Width : 260;
         var canvasHeight = RadarCanvas.ActualHeight > 20 ? RadarCanvas.ActualHeight : double.IsFinite(RadarCanvas.Height) ? RadarCanvas.Height : 280;
@@ -572,7 +611,9 @@ public partial class MainWindow : Window
         Point Map(double x, double y) => new(originX + (x - minX) * scale, canvasHeight - originY - (y - minY) * scale);
 
         var gridBrush = new SolidColorBrush(Color.FromRgb(22, 55, 46));
-        var gridStep = span > 8 ? 2.0 : span > 3 ? 1.0 : 0.5;
+        var rawStep = span / 8;
+        var magnitude = Math.Pow(10, Math.Floor(Math.Log10(rawStep)));
+        var gridStep = (rawStep / magnitude <= 2 ? 2 : rawStep / magnitude <= 5 ? 5 : 10) * magnitude;
         for (var x = Math.Ceiling(minX / gridStep) * gridStep; x <= maxX; x += gridStep)
         {
             var a = Map(x, minY); var b = Map(x, maxY);
@@ -584,41 +625,26 @@ public partial class MainWindow : Window
             RadarCanvas.Children.Add(new Line { X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y, Stroke = gridBrush, StrokeThickness = 1 });
         }
 
-        // SharedMemory 방위각 0~270도를 화면상의 -135~+135도로 변환
+        // Read-only overlay: distances from ECS; optical FOV from the XT-M60 specification.
         var rdrPoint = Map(rdr.PositionX, rdr.PositionY);
         var rdrDisplayAzimuth = Math.Clamp(rdr.AzimuthDeg, 0, 270) - 135d;
-        var fov = Math.Clamp(float.IsFinite(rdr.FieldOfViewDeg) ? rdr.FieldOfViewDeg : 0, 0, 360);
-        var edgeClearance = Math.Min(Math.Min(rdrPoint.X - inset, canvasWidth - inset - rdrPoint.X),
-            Math.Min(rdrPoint.Y - inset, canvasHeight - inset - rdrPoint.Y));
-        var viewRadius = Math.Max(4, edgeClearance - 8);
-        var rangeRing = new Ellipse
+        var viewRadius = ranges != null ? ranges[1] * scale : Math.Min(canvasWidth, canvasHeight) * .3;
+        if (ranges != null)
         {
-            Width = viewRadius * 2,
-            Height = viewRadius * 2,
-            Stroke = new SolidColorBrush(Color.FromRgb(27, 88, 66)),
-            StrokeThickness = 1,
-            StrokeDashArray = new DoubleCollection { 3, 4 },
-            IsHitTestVisible = false
-        };
-        Canvas.SetLeft(rangeRing, rdrPoint.X - viewRadius);
-        Canvas.SetTop(rangeRing, rdrPoint.Y - viewRadius);
-        RadarCanvas.Children.Add(rangeRing);
-        if (fov > 0)
-        {
-            var sector = new Polygon { Fill = new SolidColorBrush(Color.FromArgb(45, 0, 230, 138)), Stroke = new SolidColorBrush(Color.FromArgb(120, 0, 230, 138)), StrokeThickness = 1 };
-            sector.Points.Add(rdrPoint);
-            var start = rdrDisplayAzimuth - fov / 2d;
-            var steps = Math.Max(12, (int)(fov / 4));
-            for (var i = 0; i <= steps; i++)
+            var overlay = new CameraMapOverlay
             {
-                var angle = (start + fov * i / steps) * Math.PI / 180d;
-                sector.Points.Add(new Point(rdrPoint.X + viewRadius * Math.Sin(angle), rdrPoint.Y - viewRadius * Math.Cos(angle)));
-            }
-            RadarCanvas.Children.Add(sector);
+                Width = canvasWidth, Height = canvasHeight, RdrCenter = rdrPoint,
+                FcsCenter = fcs == null ? null : Map(fcs.PositionX, fcs.PositionY),
+                MinimumRadius = ranges[0] * scale, MaximumRadius = viewRadius,
+                CaptureRadius = ranges[2] * scale, Heading = rdrDisplayAzimuth,
+                IsHitTestVisible = false, HorizontalFieldOfView = fov?[0] ?? 120
+            };
+            RadarCanvas.Children.Add(overlay);
+            MapRangeSummary.Text = $"RDR {ranges[0]:G4}–{ranges[1]:G4} m · FCS shoot ≤ {ranges[2]:G4} m";
         }
-
-        var azimuthRad = rdrDisplayAzimuth * Math.PI / 180d;
-        RadarCanvas.Children.Add(new Line { X1 = rdrPoint.X, Y1 = rdrPoint.Y, X2 = rdrPoint.X + viewRadius * Math.Sin(azimuthRad), Y2 = rdrPoint.Y - viewRadius * Math.Cos(azimuthRad), Stroke = new SolidColorBrush(Color.FromRgb(0, 230, 138)), StrokeThickness = 2 });
+        else MapRangeSummary.Text = "거리 설정: ECS 연결 대기";
+        MapFovSummary.Text = $"XT-M60 · 수평 {fov?[0] ?? 120:G4}° / 수직 {fov?[1] ?? 45:G4}°\n방향 {rdrDisplayAzimuth:0.#}° · 고각 {rdr.ElevationDeg:0.#}°" +
+            (_isSharedMemoryLive ? "" : " · 마지막 수신값");
 
         var fcsPoint = fcs is null ? (Point?)null : Map(fcs.PositionX, fcs.PositionY);
         var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id)?.TargetId;
@@ -633,11 +659,13 @@ public partial class MainWindow : Window
         if (fcs is not null) AddAssetMarker(fcsPoint!.Value, "FCS", Color.FromRgb(30, 125, 157), fcs.PositionX, fcs.PositionY);
         AddAssetMarker(rdrPoint, "RDR", Color.FromRgb(0, 190, 225), rdr.PositionX, rdr.PositionY);
 
-        AddMapLabel("0°", rdrPoint.X - 8, rdrPoint.Y - viewRadius - 15, Color.FromRgb(82, 121, 109), 8);
-        var leftLimit = -135 * Math.PI / 180d;
-        var rightLimit = 135 * Math.PI / 180d;
-        AddMapLabel("-135°", rdrPoint.X + viewRadius * Math.Sin(leftLimit) - 16, rdrPoint.Y - viewRadius * Math.Cos(leftLimit), Color.FromRgb(82, 121, 109), 8);
-        AddMapLabel("+135°", rdrPoint.X + viewRadius * Math.Sin(rightLimit) - 10, rdrPoint.Y - viewRadius * Math.Cos(rightLimit), Color.FromRgb(82, 121, 109), 8);
+        if (ranges != null)
+        {
+            AddMapLabel($"{ranges[1]:G4} m", rdrPoint.X + 6, rdrPoint.Y - viewRadius - 13, Color.FromRgb(90, 211, 214), 9);
+            var textAngle = rdrDisplayAzimuth * Math.PI / 180;
+            AddMapLabel($"{fov?[0] ?? 120:G4}°", rdrPoint.X + viewRadius * .68 * Math.Sin(textAngle) - 12,
+                rdrPoint.Y - viewRadius * .68 * Math.Cos(textAngle), Color.FromRgb(0, 230, 138), 10);
+        }
 
         if (fcs is not null && fcsPoint is Point orientationPoint)
         {
@@ -1303,6 +1331,15 @@ public partial class MainWindow : Window
         ResultCode.DeviceError => "장치 처리 오류입니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
+        ResultCode.LidarUnsupported => "RDR 펌웨어가 라이다 방출 제어를 지원하지 않습니다. ED07/DE07 지원 버전으로 업데이트해 주세요",
+        ResultCode.LidarUnknown => "RDR의 실제 라이다 방출 상태가 확인되지 않았습니다",
+        ResultCode.LidarRecoveryRequired => "라이다 연동이 진행 중이거나 복구가 필요합니다. 진행 중인 작업을 확인하고 취소 후 다시 시도해 주세요",
+        ResultCode.LidarStopUnconfirmed => "라이다 정지 및 실행 준비 확인에 실패했습니다. RDR·FCS 상태와 ECS 로그를 확인해 주세요",
+        ResultCode.LidarDisconnected => "RDR 연결이 끊겨 라이다 정지를 확인할 수 없습니다",
+        ResultCode.LidarResumeUnconfirmed => "RDR 구동 준비는 완료됐지만 라이다 방출 재개를 확인하지 못했습니다. ED07/DE07 응답을 확인해 주세요",
+        ResultCode.FcsOffUnconfirmed => "FCS 출력 OFF 및 시연 종료를 확인하지 못해 라이다 구동을 중단했습니다",
+        ResultCode.RdrStartUnconfirmed => "RDR 구동 준비 완료를 확인하지 못했습니다. RDR 상태와 ECS 로그를 확인해 주세요",
+        ResultCode.LidarBusy => "RDR이 이전 명령을 처리 중입니다. 완료 후 다시 시도해 주세요",
         _ => "알 수 없는 명령 응답입니다"
     };
 
