@@ -21,11 +21,14 @@ class Program
         }
         int calls = 0; bool fail = false;
         Func<int,float[],Task> save = (group, values) => { calls++; return fail ? Task.FromException(new IOException("simulated disk failure")) : Task.CompletedTask; };
+        var owner = new Window { Width = 1480, Height = 820 };
+        new System.Windows.Interop.WindowInteropHelper(owner).EnsureHandle();
         var window = (Window)Activator.CreateInstance(type, BindingFlags.Instance | BindingFlags.NonPublic, null,
-            new object[] { new float[] { 0,0,0 }, new float[] { 2,1,0 }, new float[] { 1.5f,10,3 }, new float[] {120,45,0}, save }, null)!;
+            new object[] { owner, new float[] { 0,0,0 }, new float[] { 2,1,0 }, new float[] { 1.5f,10,3 }, new float[] {120,45,0}, save, 1d }, null)!;
         var root = (StackPanel)((ScrollViewer)window.Content).Content;
         var rows = root.Children.OfType<StackPanel>().ToArray();
         var preview = root.Children.OfType<FrameworkElement>().Single(x => x.GetType().Name == "RangePreview");
+        if (rows.Length != 4) throw new Exception("Angle editor still present in equipment settings");
         var inputs = rows[2].Children.OfType<StackPanel>().SelectMany(x => x.Children.OfType<TextBox>()).ToArray();
         var button = rows[2].Children.OfType<Button>().Single();
         void Click() => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -59,6 +62,7 @@ class Program
         using var output = File.Create("artifacts/camera-settings/preview.png"); png.Save(output);
         Console.WriteLine("PASS: GUI numeric/range rejection, failed-save preview rollback, successful refresh, labels and WPF render");
         window.Close();
+        owner.Close();
         CheckMap();
     }
     static void CheckMap()
@@ -66,7 +70,7 @@ class Program
         var main = new AadcCommandCenter.MainWindow();
         var type = main.GetType();
         const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
-        type.GetField("_cameraSettings", flags)!.SetValue(main, new[] { new float[3], new float[3], new float[] { 1.5f, 10, 3 }, new float[] {90,60,0} });
+        type.GetField("_cameraSettings", flags)!.SetValue(main, new[] { new float[] { 1.5f, 10, 3 }, new float[] {90,60,0}, new float[3] });
         type.GetField("_isSharedMemoryLive", flags)!.SetValue(main, true);
         var frame = new AadcCommandCenter.SharedFrame
         {
@@ -97,6 +101,10 @@ class Program
         var rotated = (Geometry)sectorMethod.Invoke(null, new object[] { new Point(100,100), 80d, 90d, 120d })!;
         if (!rotated.FillContains(new Point(150,100)) || rotated.FillContains(new Point(100,50)))
             throw new Exception("FOV direction does not rotate");
+        if (main.FindName("FcsPositionEditor") != null || main.FindName("RdrPositionEditor") != null)
+            throw new Exception("Retired position correction editor still exists");
+        if (main.FindName("FcsPanOffsetInput") == null || main.FindName("FcsTiltOffsetInput") == null)
+            throw new Exception("Angular calibration editor missing");
         content.UpdateLayout();
         SaveVisual(content, 1480, 820, "artifacts/camera-settings/main-map.png");
         var panel = (FrameworkElement)((FrameworkElement)canvas.Parent).Parent;

@@ -11,6 +11,7 @@ public partial class MainWindow
 {
     private float[][]? _cameraSettings;
     private bool _cameraReadPending;
+    private bool _fcsAngleDirty;
     private EquipmentSettingsWindow? _equipmentWindow;
 
     private async Task<float[]> ReadCameraGroupAsync(uint group)
@@ -28,12 +29,11 @@ public partial class MainWindow
         _cameraReadPending = true;
         try
         {
-            var values = new[] { await ReadCameraGroupAsync(0), await ReadCameraGroupAsync(1), await ReadCameraGroupAsync(2), await ReadCameraGroupAsync(3) };
+            var values = new[] { await ReadCameraGroupAsync(2), await ReadCameraGroupAsync(3), await ReadCameraGroupAsync(4) };
             _cameraSettings = values;
             DrawRadar();
             _syncingPositionInputs = true;
-            if (!_rdrPositionDirty) SetCoordinates(new[] { RdrXInput, RdrYInput, RdrZInput }, values[0]);
-            if (!_fcsPositionDirty) SetCoordinates(new[] { FcsXInput, FcsYInput, FcsZInput }, values[1]);
+            if (!_fcsAngleDirty) SetCoordinates(new[] { FcsPanOffsetInput, FcsTiltOffsetInput }, values[2]);
             var rdr = RdrSelector.SelectedItem as RdrAsset;
             var fcs = FcsSelector.SelectedItem as FcsAsset;
             if (rdr != null && fcs != null)
@@ -46,6 +46,41 @@ public partial class MainWindow
     private static void SetCoordinates(TextBox[] inputs, float[] values)
     {
         for (int i = 0; i < inputs.Length; i++) inputs[i].Text = values[i].ToString("G9", CultureInfo.CurrentCulture);
+    }
+
+    private void FcsAngleTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_syncingPositionInputs) {
+            _fcsAngleDirty = true;
+            if (FcsAngleStatus != null) FcsAngleStatus.Text = "변경값을 저장하세요.";
+        }
+    }
+
+    private async void FcsAngleSaveClick(object sender, RoutedEventArgs e)
+    {
+        if (!TryCoordinate(FcsPanOffsetInput.Text, out var pan) ||
+            !TryCoordinate(FcsTiltOffsetInput.Text, out var tilt) ||
+            Math.Abs(pan) > 180 || Math.Abs(tilt) > 90) {
+            FcsAngleStatus.Text = "팬 −180~180°, 틸트 −90~90°의 숫자를 입력하세요.";
+            return;
+        }
+        if (!_isSharedMemoryLive || FcsSelector.SelectedItem is not FcsAsset) {
+            FcsAngleStatus.Text = "저장 실패: ECS와 FCS 연결을 확인하세요.";
+            return;
+        }
+        FcsAngleSaveButton.IsEnabled = FcsPanOffsetInput.IsEnabled = FcsTiltOffsetInput.IsEnabled = false;
+        FcsAngleStatus.Text = "저장 중…";
+        try {
+            var response = await _pipeClient.SendAsync(CommandType.SetCameraSettings, 4, 0, 0,
+                positionX: pan, positionY: tilt, positionZ: 0);
+            if (response.ResultCode != 0) throw new IOException(CommandResultText((ResultCode)response.ResultCode));
+            _fcsAngleDirty = false;
+            await RefreshCameraSettingsAsync();
+            FcsAngleStatus.Text = "저장 완료 · 대상을 다시 지정해 조준하세요.";
+            AddLog($"FCS 각도 보정 저장 · 팬={pan:0.###}°, 틸트={tilt:0.###}°");
+        }
+        catch (Exception error) { FcsAngleStatus.Text = "저장 실패: " + error.Message; }
+        finally { FcsAngleSaveButton.IsEnabled = FcsPanOffsetInput.IsEnabled = FcsTiltOffsetInput.IsEnabled = true; }
     }
 
     private async void EquipmentSettingsClick(object sender, RoutedEventArgs e)
@@ -89,12 +124,14 @@ internal sealed class RangePreview : FrameworkElement
         if (w < 1 || h < 1) return;
         dc.DrawRectangle(new SolidColorBrush(Color.FromRgb(10, 20, 19)), null, new Rect(0, 0, w, h));
         // Scale in double precision, including separated installations and zero ranges.
+        var rdrPosition = Rdr.Select(p => (double)p).ToArray();
+        var fcsPosition = Fcs.Select(p => (double)p).ToArray();
         double extent = Math.Max(1, Math.Max(Ranges[1], Ranges[2]));
-        double minX = Math.Min(Rdr[0], Fcs[0]) - extent, maxX = Math.Max(Rdr[0], Fcs[0]) + extent;
-        double minY = Math.Min(Rdr[1], Fcs[1]) - extent, maxY = Math.Max(Rdr[1], Fcs[1]) + extent;
+        double minX = Math.Min(rdrPosition[0], fcsPosition[0]) - extent, maxX = Math.Max(rdrPosition[0], fcsPosition[0]) + extent;
+        double minY = Math.Min(rdrPosition[1], fcsPosition[1]) - extent, maxY = Math.Max(rdrPosition[1], fcsPosition[1]) + extent;
         double scale = Math.Min((w - 70) / (maxX - minX), (h - 70) / (maxY - minY));
-        Point Map(float[] p) => new(w / 2 + (p[0] - (minX + maxX) / 2) * scale, h / 2 - (p[1] - (minY + maxY) / 2) * scale);
-        var rdr = Map(Rdr); var fcs = Map(Fcs);
+        Point Map(double[] p) => new(w / 2 + (p[0] - (minX + maxX) / 2) * scale, h / 2 - (p[1] - (minY + maxY) / 2) * scale);
+        var rdr = Map(rdrPosition); var fcs = Map(fcsPosition);
         dc.PushClip(new RectangleGeometry(new Rect(0, 0, w, h)));
         CameraMapOverlay.Draw(dc, new Rect(0, 0, w, h), rdr, fcs,
             Ranges[0] * scale, Ranges[1] * scale, Ranges[2] * scale, Heading, Fov[0]);
@@ -148,7 +185,7 @@ internal sealed class EquipmentSettingsWindow : Window
             for (int i = 0; i < labels.Length; i++)
             {
                 var cell = new StackPanel { Width = 170, Margin = new Thickness(0, 0, 8, 0) };
-                cell.Children.Add(new TextBlock { Text = labels[i] + (group == 3 ? " (°)" : " (m)"), FontSize = 11 });
+                cell.Children.Add(new TextBlock { Text = labels[i] + (group >= 3 ? " (°)" : " (m)"), FontSize = 11 });
                 inputs[i] = new TextBox { Text = initial[i].ToString("G9", CultureInfo.CurrentCulture), Padding = new Thickness(4), Foreground = Brushes.Black, Background = Brushes.White };
                 cell.Children.Add(inputs[i]); row.Children.Add(cell);
             }
@@ -172,7 +209,7 @@ internal sealed class EquipmentSettingsWindow : Window
                     if (group == 0) preview.Rdr = values;
                     else if (group == 1) preview.Fcs = values;
                     else if (group == 2) preview.Ranges = values;
-                    else preview.Fov = values;
+                    else if (group == 3) preview.Fov = values;
                     preview.InvalidateVisual(); status.Text = title + " 저장 완료";
                 }
                 catch (Exception error) { status.Text = "저장 실패 · 기존 저장값 유지: " + error.Message; }
@@ -184,6 +221,6 @@ internal sealed class EquipmentSettingsWindow : Window
         Row("인식·shoot 거리", new[] { "RDR 최소 인식 거리", "RDR 최대 인식 거리", "FCS 최대 shoot 거리" }, ranges, 2);
         Row("RDR 시야각", new[] { "수평", "수직" }, fov, 3);
         root.Children.Add(status); root.Children.Add(preview);
-        root.Children.Add(new TextBlock { Text = "저장된 설정의 독립 미리보기 · 장비 명령/대상 할당/출력 제어와 연결되지 않음", FontSize = 11, Margin = new Thickness(0, 8, 0, 0) });
+        root.Children.Add(new TextBlock { Text = "지도와 조준 계산은 실제 설치 위치를 기준으로 합니다.", FontSize = 11, Margin = new Thickness(0, 8, 0, 0) });
     }
 }

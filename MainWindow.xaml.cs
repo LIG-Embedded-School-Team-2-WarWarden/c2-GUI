@@ -31,10 +31,10 @@ public partial class MainWindow : Window
     private bool _isRefreshingCommandStatus;
     private bool? _previousConnectionState;
     private AssignmentState? _previousAssignmentState;
+    private string? _previousAssignmentStatusText;
     private uint? _selectedTargetId;
     private double _workspaceZoom = 1.0;
     private bool _workspaceLayoutRefreshQueued;
-    private bool _rdrPositionDirty, _fcsPositionDirty;
     private bool _syncingPositionInputs;
     private bool _rdrOperatingCommandPending;
     private bool? _requestedRdrOperating;
@@ -60,7 +60,7 @@ public partial class MainWindow : Window
         Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
         Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
         _clock.Tick += (_, _) => UpdateClock();
-        _commandStatusTimer.Tick += async (_, _) => { await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
+        _commandStatusTimer.Tick += async (_, _) => { await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrEmissionAsync(); await RefreshRdrStartupAsync(); };
         _rdrElevationSendTimer.Tick += async (_, _) =>
         {
             _rdrElevationSendTimer.Stop();
@@ -293,6 +293,36 @@ public partial class MainWindow : Window
     }
 
     private bool _rdrStartupPolling;
+    private bool _rdrEmissionPolling;
+    private bool? _rdrEmissionOn;
+    private long _rdrEmissionAt;
+    private string _lastEmissionText = "";
+    private void UpdateRdrEmissionLine()
+    {
+        if (RdrEmissionLine is null) return;
+        var rdr = RdrSelector.SelectedItem as RdrAsset;
+        bool connected = _isSharedMemoryLive && rdr?.IsConnected == true;
+        bool? emission = connected && Environment.TickCount64 - _rdrEmissionAt < 3200 ? _rdrEmissionOn : null;
+        var text = connected ? LidarEmissionStatus.Text(rdr!.IsOperating, emission) : "RDR 연결 대기 / 방출 상태 확인 불가";
+        RdrEmissionLine.Text = text;
+        RdrEmissionLine.Foreground = emission.HasValue ? Brushes.LightGreen : Brushes.Orange;
+        if (_lastEmissionText != text) { AddLog($"RDR · {text}"); _lastEmissionText = text; }
+    }
+    private async Task RefreshRdrEmissionAsync()
+    {
+        if (_rdrEmissionPolling || !_isSharedMemoryLive) return;
+        _rdrEmissionPolling = true;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var response = await _pipeClient.SendAsync(CommandType.GetRdrLidarState, cancellationToken: timeout.Token);
+            _rdrEmissionOn = (ResultCode)response.ResultCode == ResultCode.Success && response.IsConnected == 1 && response.AssignmentState == 1
+                ? response.FireState == 1 : null;
+            _rdrEmissionAt = Environment.TickCount64;
+        }
+        catch { _rdrEmissionOn = null; }
+        finally { _rdrEmissionPolling = false; UpdateRdrEmissionLine(); }
+    }
     private async Task RefreshRdrStartupAsync()
     {
         if (_requestedRdrOperating != true || _rdrStartupPolling) return;
@@ -303,7 +333,7 @@ public partial class MainWindow : Window
             var result = (ResultCode)response.ResultCode;
             if (result == ResultCode.StatusPending) return;
             _requestedRdrOperating = null;
-            if (result == ResultCode.Success) AddLog("RDR 구동 완료 · 라이다 방출 재개 확인");
+            if (result == ResultCode.Success) AddLog("RDR 구동 완료 · SDK 재개 명령 성공");
             else
             {
                 var message = CommandResultText(result);
@@ -452,74 +482,14 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void RdrPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(true);
-    private async void FcsPositionApplyClick(object sender, RoutedEventArgs e) => await ApplyAssetPositionAsync(false);
-    private void RdrPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(RdrPositionEditor, RdrPositionToggleButton, "RDR 영점 보정 (m)", "RDR 영점 보정 접기");
-    private void FcsPositionToggleClick(object sender, RoutedEventArgs e) => TogglePositionEditor(FcsPositionEditor, FcsPositionToggleButton, "FCS 영점 보정 (m)", "FCS 영점 보정 접기");
-
-    private static void TogglePositionEditor(Border editor, Button button, string openText, string closeText)
-    {
-        var currentHeight = editor.ActualHeight;
-        var opening = editor.Visibility != Visibility.Visible || Equals(button.Content, openText);
-        editor.BeginAnimation(FrameworkElement.HeightProperty, null);
-        if (opening)
-        {
-            editor.Visibility = Visibility.Visible;
-            editor.Height = 0;
-            button.Content = closeText;
-            var animation = new DoubleAnimation(0, 58, TimeSpan.FromMilliseconds(220))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-            };
-            animation.Completed += (_, _) => { editor.Height = 58; editor.BeginAnimation(FrameworkElement.HeightProperty, null); };
-            editor.BeginAnimation(FrameworkElement.HeightProperty, animation);
-        }
-        else
-        {
-            var animation = new DoubleAnimation(currentHeight, 0, TimeSpan.FromMilliseconds(180));
-            animation.Completed += (_, _) => { editor.Visibility = Visibility.Collapsed; editor.Height = 0; button.Content = openText; };
-            editor.BeginAnimation(FrameworkElement.HeightProperty, animation);
-        }
-    }
-    private void RdrPositionTextChanged(object sender, TextChangedEventArgs e) { if (!_syncingPositionInputs) _rdrPositionDirty = true; }
-    private void FcsPositionTextChanged(object sender, TextChangedEventArgs e) { if (!_syncingPositionInputs) _fcsPositionDirty = true; }
-
-    private async Task ApplyAssetPositionAsync(bool isRdr)
-    {
-        var xText = isRdr ? RdrXInput.Text : FcsXInput.Text;
-        var yText = isRdr ? RdrYInput.Text : FcsYInput.Text;
-        var zText = isRdr ? RdrZInput.Text : FcsZInput.Text;
-        if (!TryCoordinate(xText, out var x) || !TryCoordinate(yText, out var y) || !TryCoordinate(zText, out var z))
-        {
-            ShowAlert("좌표 X, Y, Z를 유효한 숫자로 입력하세요.", "좌표 입력 확인");
-            return;
-        }
-        var rdr = RdrSelector.SelectedItem as RdrAsset;
-        var fcs = FcsSelector.SelectedItem as FcsAsset;
-        if (!_isSharedMemoryLive || (isRdr ? rdr is null : fcs is null))
-        {
-            ShowAlert("공유 메모리와 연결된 자산이 필요합니다.", "좌표 적용 불가");
-            return;
-        }
-        try
-        {
-            var response = await _pipeClient.SendAsync(CommandType.SetCameraSettings, targetId: isRdr ? 0u : 1u, rdrId: 0, fcsId: 0,
-                positionX: x, positionY: y, positionZ: z);
-            if ((ResultCode)response.ResultCode != ResultCode.Success)
-                throw new IOException(CommandResultText((ResultCode)response.ResultCode));
-            if (isRdr) _rdrPositionDirty = false; else _fcsPositionDirty = false;
-            await RefreshCameraSettingsAsync();
-            AddLog($"{(isRdr ? "RDR" : "FCS")} 영점 보정 저장 · X={x:0.###}, Y={y:0.###}, Z={z:0.###} m");
-        }
-        catch (Exception ex) { ShowAlert($"좌표 적용에 실패했습니다: {ex.Message}", "좌표 적용 실패"); }
-    }
-
     private static bool TryCoordinate(string value, out float coordinate) =>
         float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out coordinate) && float.IsFinite(coordinate);
 
     private void RefreshRdrInfo(RdrAsset? rdr)
     {
         if (RdrIdText is null) return;
+        if (!_isSharedMemoryLive || rdr?.IsConnected != true) _rdrEmissionOn = null;
+        UpdateRdrEmissionLine();
         if (!_isSharedMemoryLive || rdr is null)
         {
             UpdateRdrElevationControl(rdr);
@@ -593,20 +563,24 @@ public partial class MainWindow : Window
 
         var fcs = FcsSelector.SelectedItem as FcsAsset;
         var targets = _data.Targets.Where(x => (x.Valid != 0 || x.IsObservationWaiting) && x.RdrId == rdr.Id).ToArray();
-        double minX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Min();
-        double maxX = new[] { rdr.PositionX, fcs?.PositionX ?? rdr.PositionX }.Concat(targets.Select(x => x.LidarX)).Max();
-        double minY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Min();
-        double maxY = new[] { rdr.PositionY, fcs?.PositionY ?? rdr.PositionY }.Concat(targets.Select(x => x.LidarY)).Max();
-        var ranges = _cameraSettings?[2];
-        var fov = _cameraSettings is { Length: > 3 } ? _cameraSettings[3] : null;
+        var rdrX = (double)rdr.PositionX;
+        var rdrY = (double)rdr.PositionY;
+        var fcsX = fcs == null ? rdrX : (double)fcs.PositionX;
+        var fcsY = fcs == null ? rdrY : (double)fcs.PositionY;
+        double minX = new[] { rdrX, fcsX }.Concat(targets.Select(x => (double)x.LidarX)).Min();
+        double maxX = new[] { rdrX, fcsX }.Concat(targets.Select(x => (double)x.LidarX)).Max();
+        double minY = new[] { rdrY, fcsY }.Concat(targets.Select(x => (double)x.LidarY)).Min();
+        double maxY = new[] { rdrY, fcsY }.Concat(targets.Select(x => (double)x.LidarY)).Max();
+        var ranges = _cameraSettings?[0];
+        var fov = _cameraSettings is { Length: > 1 } ? _cameraSettings[1] : null;
         if (ranges != null)
         {
-            minX = Math.Min(minX, (double)rdr.PositionX - ranges[1]); maxX = Math.Max(maxX, (double)rdr.PositionX + ranges[1]);
-            minY = Math.Min(minY, (double)rdr.PositionY - ranges[1]); maxY = Math.Max(maxY, (double)rdr.PositionY + ranges[1]);
+            minX = Math.Min(minX, rdrX - ranges[1]); maxX = Math.Max(maxX, rdrX + ranges[1]);
+            minY = Math.Min(minY, rdrY - ranges[1]); maxY = Math.Max(maxY, rdrY + ranges[1]);
             if (fcs != null)
             {
-                minX = Math.Min(minX, (double)fcs.PositionX - ranges[2]); maxX = Math.Max(maxX, (double)fcs.PositionX + ranges[2]);
-                minY = Math.Min(minY, (double)fcs.PositionY - ranges[2]); maxY = Math.Max(maxY, (double)fcs.PositionY + ranges[2]);
+                minX = Math.Min(minX, fcsX - ranges[2]); maxX = Math.Max(maxX, fcsX + ranges[2]);
+                minY = Math.Min(minY, fcsY - ranges[2]); maxY = Math.Max(maxY, fcsY + ranges[2]);
             }
         }
         var span = Math.Max(Math.Max(maxX - minX, maxY - minY), 1.0);
@@ -636,7 +610,7 @@ public partial class MainWindow : Window
         }
 
         // Read-only overlay: distances from ECS; optical FOV from the XT-M60 specification.
-        var rdrPoint = Map(rdr.PositionX, rdr.PositionY);
+        var rdrPoint = Map(rdrX, rdrY);
         var rdrDisplayAzimuth = Math.Clamp(rdr.AzimuthDeg, 0, 270) - 135d;
         var viewRadius = ranges != null ? ranges[1] * scale : Math.Min(canvasWidth, canvasHeight) * .3;
         if (ranges != null)
@@ -644,7 +618,7 @@ public partial class MainWindow : Window
             var overlay = new CameraMapOverlay
             {
                 Width = canvasWidth, Height = canvasHeight, RdrCenter = rdrPoint,
-                FcsCenter = fcs == null ? null : Map(fcs.PositionX, fcs.PositionY),
+                FcsCenter = fcs == null ? null : Map(fcsX, fcsY),
                 MinimumRadius = ranges[0] * scale, MaximumRadius = viewRadius,
                 CaptureRadius = ranges[2] * scale, Heading = rdrDisplayAzimuth,
                 IsHitTestVisible = false, HorizontalFieldOfView = fov?[0] ?? 120
@@ -652,7 +626,7 @@ public partial class MainWindow : Window
             RadarCanvas.Children.Add(overlay);
         }
 
-        var fcsPoint = fcs is null ? (Point?)null : Map(fcs.PositionX, fcs.PositionY);
+        var fcsPoint = fcs is null ? (Point?)null : Map(fcsX, fcsY);
         var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id)?.TargetId;
         var laserTarget = targets.FirstOrDefault(x => x.Id == assignedTargetId);
         if (fcs?.LaserOn == true && fcsPoint is Point fp && laserTarget is not null)
@@ -662,8 +636,8 @@ public partial class MainWindow : Window
         }
 
         AddMapLabel("Y ↑   ·   거리 m", 5, canvasHeight - 17, Color.FromRgb(82, 121, 109));
-        if (fcs is not null) AddAssetMarker(fcsPoint!.Value, "FCS", Color.FromRgb(30, 125, 157), fcs.PositionX, fcs.PositionY);
-        AddAssetMarker(rdrPoint, "RDR", Color.FromRgb(0, 190, 225), rdr.PositionX, rdr.PositionY);
+        if (fcs is not null) AddAssetMarker(fcsPoint!.Value, "FCS", Color.FromRgb(30, 125, 157), fcsX, fcsY);
+        AddAssetMarker(rdrPoint, "RDR", Color.FromRgb(0, 190, 225), rdrX, rdrY);
 
         if (ranges != null)
         {
@@ -714,7 +688,7 @@ public partial class MainWindow : Window
             AddMapLabel(target.DisplayName, point.X + 6, point.Y - 5, color, 8);
         }
 
-        void AddAssetMarker(Point p, string label, Color color, float x, float y)
+        void AddAssetMarker(Point p, string label, Color color, double x, double y)
         {
             var marker = new Ellipse { Width = 16, Height = 16, Fill = new SolidColorBrush(color), Stroke = Brushes.White, StrokeThickness = 1, ToolTip = $"{label}  X:{x:0.00}m  Y:{y:0.00}m" };
             Canvas.SetLeft(marker, p.X - 8); Canvas.SetTop(marker, p.Y - 8); RadarCanvas.Children.Add(marker);
@@ -903,7 +877,9 @@ public partial class MainWindow : Window
         _isRefreshingCommandStatus = true;
         try
         {
-            var response = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: 1, fcsId: 1);
+            var response = await _pipeClient.SendAsync(CommandType.GetManualStatus, rdrId: 1, fcsId: 1);
+            if ((ResultCode)response.ResultCode == ResultCode.NotSupported)
+                response = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: 1, fcsId: 1);
             SetCommandPipeOnline(true);
             ApplyCommandResponse(response);
         }
@@ -976,7 +952,9 @@ public partial class MainWindow : Window
                 _data.Assignments.Add(assignment);
             }
             assignment.FcsId = response.FcsId;
-            assignment.SetCommandStatus(state, response.FireState);
+            if (response.CommandType == (uint)CommandType.GetManualStatus)
+                assignment.SetManualStatus(state, (ResultCode)response.ResultCode, response.FireState);
+            else assignment.SetCommandStatus(state, response.FireState);
             _assignedTargets.Add(response.AssignedTargetId);
             var target = _data.Targets.FirstOrDefault(x => x.Id == response.AssignedTargetId);
             if (target is not null)
@@ -987,10 +965,13 @@ public partial class MainWindow : Window
             }
         }
 
-        if (_previousAssignmentState != state)
+        var stateText = state == AssignmentState.Failed && _assignmentsByTarget.TryGetValue(response.AssignedTargetId, out var failed)
+            ? failed.StateText : AssignmentStateText(state);
+        if (_previousAssignmentState != state || _previousAssignmentStatusText != stateText)
         {
-            AddLog($"명령 서버 객체할당 상태 · {AssignmentStateText(state)} · {TargetName(response.AssignedTargetId)}");
+            AddLog($"명령 서버 객체할당 상태 · {stateText} · {TargetName(response.AssignedTargetId)}");
             _previousAssignmentState = state;
+            _previousAssignmentStatusText = stateText;
         }
         RefreshAssignments();
     }
@@ -1009,7 +990,7 @@ public partial class MainWindow : Window
         AssignmentState.Aimed => "조준 완료",
         AssignmentState.ScanPaused => "라이다 조사 중지 완료",
         AssignmentState.Firing => "모의 발사 진행",
-        AssignmentState.FireConfirmed => "발사 완료",
+        AssignmentState.FireConfirmed => "촬영 완료 · 조사 재개 대기",
         AssignmentState.ScanResumed => "조사 재개 완료 · 결과 판정 중",
         AssignmentState.ResultConfirmed => "결과 확인 · HIT",
         AssignmentState.TargetStillPresent => "결과 확인 · 객체 유지",
@@ -1025,6 +1006,8 @@ public partial class MainWindow : Window
         ResultCode.AlreadyAssigned => "FCS에 이미 다른 객체가 할당되어 있습니다",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
+        ResultCode.ResultUnconfirmed => "동일 ID의 재관측을 3초 안에 확인하지 못했습니다",
+        ResultCode.PauseTimeout => "촬영 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
         ResultCode.LidarUnsupported => "RDR 펌웨어가 라이다 방출 제어를 지원하지 않습니다. ED07/DE07 지원 버전으로 업데이트해 주세요",
@@ -1032,7 +1015,7 @@ public partial class MainWindow : Window
         ResultCode.LidarRecoveryRequired => "라이다 연동이 진행 중이거나 복구가 필요합니다. 진행 중인 작업을 확인하고 취소 후 다시 시도해 주세요",
         ResultCode.LidarStopUnconfirmed => "라이다 정지 및 실행 준비 확인에 실패했습니다. RDR·FCS 상태와 ECS 로그를 확인해 주세요",
         ResultCode.LidarDisconnected => "RDR 연결이 끊겨 라이다 정지를 확인할 수 없습니다",
-        ResultCode.LidarResumeUnconfirmed => "RDR 구동 준비는 완료됐지만 라이다 방출 재개를 확인하지 못했습니다. ED07/DE07 응답을 확인해 주세요",
+        ResultCode.LidarResumeUnconfirmed => "RDR 구동 준비는 완료됐지만 SDK 재개 명령이 실패했거나 응답이 없습니다. ED07/DE07 응답을 확인해 주세요",
         ResultCode.FcsOffUnconfirmed => "FCS 출력 OFF 및 시연 종료를 확인하지 못해 라이다 구동을 중단했습니다",
         ResultCode.RdrStartUnconfirmed => "RDR 구동 준비 완료를 확인하지 못했습니다. RDR 상태와 ECS 로그를 확인해 주세요",
         ResultCode.LidarBusy => "RDR이 이전 명령을 처리 중입니다. 완료 후 다시 시도해 주세요",
@@ -1182,8 +1165,11 @@ public sealed class AssignmentView : INotifyPropertyChanged
         OnPropertyChanged(nameof(StageCommandsEnabled));
     }
 
+    private int _lastManualStep;
+    private ResultCode _failureReason;
     private int ManualCompletedStep => _commandState switch
     {
+        AssignmentState.Failed => _lastManualStep,
         AssignmentState.ManualAiming => 2,
         AssignmentState.TargetStillPresent => 8,
         >= AssignmentState.Detected and <= AssignmentState.ResultConfirmed => (int)_commandState.Value - 100,
@@ -1213,9 +1199,46 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _connectionFailed = false;
         _commandState = state;
         _fireState = fireState;
+        if (state != AssignmentState.Failed)
+        {
+            _lastManualStep = ManualCompletedStep;
+            _failureReason = ResultCode.Success;
+        }
         OnPropertyChanged(nameof(StageCommandsEnabled));
         RefreshStateText(null, null);
     }
+
+    internal void SetManualStatus(AssignmentState state, ResultCode reason, uint completedStep)
+    {
+        if (state == AssignmentState.Failed)
+        {
+            _lastManualStep = (int)Math.Min(completedStep, 8u);
+            _failureReason = reason;
+        }
+        SetCommandStatus(state, state == AssignmentState.FireConfirmed ? 1u : 0u);
+    }
+
+    private string FailureText => _failureReason switch
+    {
+        ResultCode.ResultUnconfirmed => "결과 미확정 · 동일 ID 재관측 시간 초과 (3초)",
+        ResultCode.PauseTimeout => "진행 중단 · 촬영 완료 전 조사 중지 제한 초과 (10초)",
+        ResultCode.StatusPending => "진행 중단 · FCS 연결 또는 최신 상태 확인 불가",
+        ResultCode.TargetPending => "진행 중단 · RDR 관측/보고 상태 확인 불가",
+        ResultCode.TargetChanged => "진행 중단 · 대상 위치 또는 관측 세션 변경",
+        ResultCode.DeviceFault => "진행 중단 · FCS 장치 오류",
+        ResultCode.AlignmentRequired => "진행 중단 · 조준 정렬 확인 실패",
+        ResultCode.LidarDisconnected => "진행 중단 · RDR 연결 끊김 또는 세션 변경",
+        ResultCode.LidarStopUnconfirmed => "진행 중단 · 라이다 정지 상태 확인 실패",
+        ResultCode.LidarResumeUnconfirmed => "진행 중단 · 라이다 재개 확인 실패",
+        ResultCode.LidarUnknown => "진행 중단 · 라이다 방출 상태 확인 불가",
+        ResultCode.FcsOffUnconfirmed => "진행 중단 · FCS 출력/동작 종료 확인 실패",
+        ResultCode.LidarRecoveryRequired => "진행 중단 · 라이다 연동 복구 필요",
+        ResultCode.ResponseTimeout => "진행 중단 · 장치 응답 시간 초과",
+        ResultCode.DeviceRejected => "진행 중단 · 장치 명령 거부",
+        ResultCode.DeviceError => "진행 중단 · 장치 처리 오류",
+        ResultCode.Success => "진행 중단 · 상세 사유 확인 중",
+        _ => $"진행 중단 · 오류 코드 {(uint)_failureReason}"
+    };
 
     public void SetCommandUnavailable()
     {
@@ -1256,6 +1279,21 @@ public sealed class AssignmentView : INotifyPropertyChanged
         if (!HasAssignment) return;
 
         int completed = ManualCompletedStep;
+        if (_commandState == AssignmentState.Failed)
+        {
+            // The ECS supplies progress even after reconnecting to a failed run.
+            int[] thresholds = [3, 4, 6, 7];
+            int failedIndex = Array.FindIndex(thresholds, threshold => completed < threshold);
+            var failedStages = thresholds.Select((threshold, index) =>
+                new AssignmentStage(StageLabels[index], completed >= threshold ? "완료" :
+                    index == failedIndex ? "중단" : "대기", index == failedIndex)).ToList();
+            failedStages.Add(new AssignmentStage(StageLabels[4],
+                _failureReason == ResultCode.ResultUnconfirmed ? "미확정 · 재관측 시간 초과" :
+                failedIndex < 0 ? "판정 중단" : "미판정", true, "할당 해제", true)
+                { Command = CommandType.CancelAssignment });
+            UpdateStages(failedStages.ToArray());
+            return;
+        }
         if (completed > 0)
         {
             bool aiming = _commandState == AssignmentState.ManualAiming;
@@ -1277,7 +1315,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
                     "중지", completed == 3) { Command = CommandType.PauseManualScan },
                 new(StageLabels[2], completed >= 6 ? "완료" : firing ? "발사 중" : "대기", completed is 4 or 5,
                     "발사", completed == 4) { Command = CommandType.StartManualFire },
-                new(StageLabels[3], completed >= 7 ? "완료" : "대기", completed == 6,
+                new(StageLabels[3], completed >= 7 ? "완료" : completed == 6 ? "재개 대기" : "대기", completed == 6,
                     "재개", completed == 6) { Command = CommandType.ResumeManualScan },
                 result
             ]);
@@ -1310,6 +1348,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     {
         if (_connectionPending) { StateText = "연결 시도 중"; return; }
         if (_connectionFailed) { StateText = "연결 실패 · 재시도 가능"; return; }
+        if (_commandState == AssignmentState.Failed) { StateText = FailureText; return; }
         if (ManualCompletedStep > 0)
         {
             StateText = MainWindow.AssignmentStateText(_commandState!.Value);

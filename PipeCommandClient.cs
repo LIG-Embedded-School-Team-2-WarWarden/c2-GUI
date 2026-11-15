@@ -15,6 +15,7 @@ internal enum CommandType : uint
     SetAssetPosition = 5,   // 자산 좌표 설정, X/Y/Z는 미터 단위
     SetRdrOperating = 6,    // RDR 동작 상태 설정, TargetId: 0=비활성, 1=작동
     GetRdrStartupStatus = 18,
+    GetRdrLidarState = 19, // AssignmentState=known(0/1), FireState=known ON(0/1).
     GetCameraSettings = 8,
     SetCameraSettings = 9,
     GetFcsBusy = 7,        // 성공 응답의 FireState는 FCS busy 상태
@@ -26,7 +27,8 @@ internal enum CommandType : uint
     ConfirmManualFire = 1006,
     ResumeManualScan = 1007,
     ConfirmManualResult = 1008,
-    RetryManualAssignment = 1009
+    RetryManualAssignment = 1009,
+    GetManualStatus = 1010 // ResultCode=실패 사유, FireState=마지막 진행 단계(0~8)
 }
 
 /// <summary>Named Pipe 명령 처리 결과</summary>
@@ -40,7 +42,13 @@ internal enum ResultCode : uint
     NotSupported = 5,    // 지원하지 않는 명령 종류
     DeviceError = 6,     // 모의 장치 처리 중 오류 발생
     StatusPending = 7,   // 확장 응답에서 새 상태를 기다리는 중
+    TargetPending = 8,
+    TargetChanged = 9,
     DeviceFault = 10,    // 확장 응답에서 장비가 준비되지 않음
+    AlignmentRequired = 11,
+    DeviceBusy = 12,
+    ResponseTimeout = 13,
+    DeviceRejected = 14,
     LidarUnsupported = 15,
     LidarUnknown = 16,
     LidarRecoveryRequired = 17,
@@ -49,7 +57,9 @@ internal enum ResultCode : uint
     LidarBusy = 20,
     LidarResumeUnconfirmed = 21,
     FcsOffUnconfirmed = 22,
-    RdrStartUnconfirmed = 23
+    RdrStartUnconfirmed = 23,
+    ResultUnconfirmed = 24,
+    PauseTimeout = 25
 }
 
 /// <summary>FCS의 객체 할당 진행 상태</summary>

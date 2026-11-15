@@ -12,6 +12,9 @@ static class Checks
     [STAThread] static void Main()
     {
         var app = new App(); app.InitializeComponent();
+        Check(LidarEmissionStatus.Text(true,null)=="구동 중 / 방출 상태 미확인", "unknown was confused with OFF");
+        Check(LidarEmissionStatus.Text(true,false).Contains("OFF 확인"), "confirmed OFF missing");
+        Check(LidarEmissionStatus.Text(true,true).Contains("ON 확인"), "confirmed ON missing");
         var window = new MainWindow();
         try
         {
@@ -37,6 +40,8 @@ static class Checks
             Check(!CanAim(), "paused target allowed manual aim");
             if (Environment.GetEnvironmentVariable("RETENTION_RENDER") is string output)
             {
+                typeof(MainWindow).GetMethod("UpdateRdrEmissionLine", BindingFlags.NonPublic|BindingFlags.Instance)!
+                    .Invoke(window,null);
                 var content=(FrameworkElement)window.Content;
                 content.Measure(new Size(1500,950));content.Arrange(new Rect(0,0,1500,950));content.UpdateLayout();
                 var bitmap=new RenderTargetBitmap(1500,950,96,96,PixelFormats.Pbgra32);bitmap.Render(content);
@@ -56,7 +61,25 @@ static class Checks
             FrameFreshnessChecks.Run(s => connection.Invoke(window,new object[]{s}),
                 f => apply.Invoke(window,new object[]{f}), () => grid.Items.Count, CanAim);
             Check(!CanAim() && assignment.LidarXText == "—", "offline assignment remained usable");
+            Check(((TextBlock)window.FindName("RdrEmissionLine")).Text.Contains("확인 불가"), "offline emission status retained");
             Check(assignment.Stages[^1].ActionLabel is null, "offline result button remained visible");
+            var manualStatus = typeof(AssignmentView).GetMethod("SetManualStatus", BindingFlags.NonPublic|BindingFlags.Instance)!;
+            void Manual(AssignmentView view, string stateName, string reasonName, uint step) => manualStatus.Invoke(view,
+                new object[] { Enum.Parse(manualStatus.GetParameters()[0].ParameterType,stateName),
+                    Enum.Parse(manualStatus.GetParameters()[1].ParameterType,reasonName),step });
+            var restored = new AssignmentView(7,1);
+            Manual(restored,"Failed","ResultUnconfirmed",7);
+            restored.Refresh(null,null);
+            Check(restored.Stages.Take(4).All(s=>s.Status=="완료"),"reconnected failure lost completed stages");
+            Check(restored.StateText.Contains("재관측 시간 초과") && restored.Stages[^1].CanAdvance,"failure reason/cancel missing");
+            Check(!restored.Stages.Take(4).Any(s=>s.CanAdvance),"failed run enabled a stage command");
+            Manual(restored,"Failed","StatusPending",6);restored.Refresh(null,null);
+            Check(restored.Stages.Take(3).All(s=>s.Status=="완료")&&restored.Stages[3].Status=="중단","post-fire failure progress wrong");
+            Check(restored.StateText.Contains("FCS"),"failure reason not distinguished");
+            Manual(restored,"Confirmed","Success",2);restored.Refresh(null,null);
+            Check(!restored.Stages.Any(s=>s.Status=="완료"),"retry kept old completion");
+            Manual(restored,"FireConfirmed","Success",6);restored.Refresh(null,null);
+            Check(restored.Stages[3].CanAdvance&&restored.Stages[3].Status=="재개 대기","manual resume unavailable");
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
         finally { window.Close(); app.Shutdown(); }
