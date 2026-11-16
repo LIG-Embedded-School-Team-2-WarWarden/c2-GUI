@@ -33,6 +33,8 @@ enum class CommandType : std::uint32_t
     GetCameraSettings = 8, // targetId: 설정 그룹(0~3), 좌표값은 응답에 float 비트로 반환
     SetCameraSettings = 9, // targetId: 설정 그룹(0~3), 좌표값은 float
     GetRdrStartupStatus = 18, // 라이다 구동 준비 상태 조회
+    GetRdrLidarState = 19,
+    GetRdrSensorHealth = 20,
     RegisterManualTarget = 1001,
     ConfirmManualAssignment = 1002,
     StartManualAim = 1003,
@@ -41,7 +43,15 @@ enum class CommandType : std::uint32_t
     ConfirmManualFire = 1006,
     ResumeManualScan = 1007,
     ConfirmManualResult = 1008,
-    RetryManualAssignment = 1009
+    RetryManualAssignment = 1009,
+    GetBatchStatus = 1200,
+    RegisterBatchTarget = 1201,
+    CancelBatchTarget = 1202,
+    AimBatchTarget = 1203,
+    PauseBatchScan = 1204,
+    FireBatchTarget = 1205,
+    ResumeBatchScan = 1206,
+    RetryBatchTarget = 1207
 };
 
 

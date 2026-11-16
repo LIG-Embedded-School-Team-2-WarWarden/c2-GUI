@@ -47,10 +47,26 @@ namespace
     std::uint32_t g_targetId = 0;
     std::uint32_t g_fcsId = 1;
     AssignmentState g_assignment = AssignmentState::Idle;
+    bool g_batchPaused = false;
+    std::uint32_t g_batchActiveTarget = 0;
+    std::array<AssignmentState, kMaxTargets> g_batchStates{};
+    std::array<bool, kMaxTargets> g_batchHits{};
+    std::array<bool, kMaxTargets> g_releasedBatchHits{};
     bool IsManualScanPaused()
     {
-        return g_assignment == AssignmentState::ScanPaused || g_assignment == AssignmentState::Firing ||
-            g_assignment == AssignmentState::FireConfirmed;
+        return g_batchPaused || (g_batchActiveTarget == 0 &&
+            (g_assignment == AssignmentState::ScanPaused || g_assignment == AssignmentState::Firing ||
+             g_assignment == AssignmentState::FireConfirmed));
+    }
+
+    bool BatchContains(AssignmentState state)
+    {
+        return std::find(g_batchStates.begin(), g_batchStates.end(), state) != g_batchStates.end();
+    }
+
+    bool BatchReadyToResume()
+    {
+        return g_batchPaused && g_rdrOperating && !BatchContains(AssignmentState::Firing);
     }
     std::uint32_t g_fireState = 0;
     bool g_laserOn = false;
@@ -284,6 +300,7 @@ namespace
 
             std::uint32_t resultRound = 0;
             std::uint32_t resultTargetId = 0;
+            bool batchResultFrame = false;
             // 네임드 파이프 명령으로 변경된 자산 상태를 공유 메모리에도 반영
             {
                 std::lock_guard<std::mutex> lock(g_stateMutex);
@@ -296,6 +313,13 @@ namespace
                         g_fireState = 1;
                         g_hasCompletedShot[g_targetId - 1001] = true;
                         g_assignment = AssignmentState::FireConfirmed;
+                        if (g_batchActiveTarget != 0)
+                        {
+                            g_batchStates[g_batchActiveTarget - 1001] = AssignmentState::FireConfirmed;
+                            g_batchActiveTarget = 0;
+                            g_targetId = 0;
+                            g_assignment = AssignmentState::Idle;
+                        }
                     }
                     Print(L"[교전] 5초 경과로 레이저 OFF");
                 }
@@ -342,6 +366,11 @@ namespace
                 // 격추 처리된 객체는 이후 프레임에서도 격추 상태를 유지
                 for (std::uint32_t i = 0; i < kMaxTargets; ++i)
                 {
+                    if (g_releasedBatchHits[i] && g_connected && g_rdrOperating && !IsManualScanPaused())
+                    {
+                        g_targetKilled[i] = true;
+                        g_releasedBatchHits[i] = false;
+                    }
                     if (g_targetRemoved[i]) continue;
                     auto& target = frame.payload.targets[frame.payload.targetCount++];
                     target = fixedTargets.targets[i];
@@ -356,6 +385,11 @@ namespace
                     resultRound = g_observationRound;
                     resultTargetId = g_targetId;
                 }
+                if (BatchContains(AssignmentState::ScanResumed) && g_connected && g_rdrOperating)
+                {
+                    resultRound = g_observationRound;
+                    batchResultFrame = true;
+                }
             }
 
             CompleteAdjustmentIfAligned();
@@ -369,6 +403,29 @@ namespace
                 std::memcpy(view, &frame, sizeof(frame));
                 MemoryBarrier();
                 ReleaseMutex(mutex);
+                if (batchResultFrame)
+                {
+                    std::lock_guard<std::mutex> lock(g_stateMutex);
+                    if (resultRound == g_observationRound && g_connected && g_rdrOperating)
+                    {
+                        const auto* begin = frame.payload.targets;
+                        const auto* end = begin + frame.payload.targetCount;
+                        for (std::uint32_t i = 0; i < kMaxTargets; ++i)
+                        {
+                            if (g_batchStates[i] != AssignmentState::ScanResumed) continue;
+                            const bool observed = std::any_of(begin, end, [i](const Target& target)
+                            {
+                                return target.targetId == 1001 + i;
+                            });
+                            g_batchStates[i] = observed ? AssignmentState::TargetStillPresent : AssignmentState::ResultConfirmed;
+                            if (!observed)
+                            {
+                                g_targetKilled[i] = true;
+                                g_targetRemoved[i] = false;
+                            }
+                        }
+                    }
+                }
                 if (resultTargetId != 0)
                 {
                     const auto* begin = frame.payload.targets;
@@ -436,7 +493,7 @@ namespace
         case CommandType::ConfirmManualAssignment: return L"수동 할당";
         case CommandType::StartManualAim: return L"수동 조준";
         case CommandType::PauseManualScan: return L"조사 중지";
-        case CommandType::StartManualFire: return L"모의 발사";
+        case CommandType::StartManualFire: return L"발사";
         case CommandType::ConfirmManualFire: return L"발사 완료 확인";
         case CommandType::ResumeManualScan: return L"조사 재개";
         case CommandType::ConfirmManualResult: return L"결과 확인";
@@ -475,8 +532,8 @@ namespace
         case AssignmentState::ManualAiming: return L"수동 조준 중";
         case AssignmentState::Aimed: return L"조준 완료";
         case AssignmentState::ScanPaused: return L"조사 중지";
-        case AssignmentState::Firing: return L"모의 발사 요청 완료";
-        case AssignmentState::FireConfirmed: return L"발사 완료 확인";
+        case AssignmentState::Firing: return L"발사 중";
+        case AssignmentState::FireConfirmed: return L"발사 완료";
         case AssignmentState::ScanResumed: return L"조사 재개";
         case AssignmentState::ResultConfirmed: return L"결과 확인";
         case AssignmentState::TargetStillPresent: return L"객체 유지";
@@ -524,7 +581,135 @@ namespace
             return;
 
         g_assignment = g_assignment == AssignmentState::ManualAiming ? AssignmentState::Aimed : AssignmentState::Assigned;
+        if (g_batchActiveTarget != 0)
+            g_batchStates[g_batchActiveTarget - 1001] = g_batchPaused ? AssignmentState::ScanPaused : AssignmentState::Aimed;
         Print(L"[상태] FCS 방위각/고각 목표 도달");
+    }
+
+    PipeResponse HandleBatchCommand(const PipeCommand& command, CommandType type,
+        std::chrono::steady_clock::time_point now, bool fcsBusy)
+    {
+        PipeResponse response{ kPipeMagic, kPipeVersion, command.requestId, command.commandType,
+            0, 1, 0, 0, 0, g_connected ? 1u : 0u };
+        if (command.magic != kPipeMagic || command.version != kPipeVersion ||
+            command.requestId == 0 || command.rdrId != 1 || command.fcsId != 1)
+        {
+            response.resultCode = static_cast<std::uint32_t>(ResultCode::InvalidRequest);
+            return response;
+        }
+        const auto targetId = command.targetId;
+        if (type == CommandType::GetBatchStatus && targetId == 0) return response;
+        if (targetId < 1001 || targetId >= 1001 + kMaxTargets)
+        {
+            response.resultCode = static_cast<std::uint32_t>(ResultCode::InvalidRequest);
+            return response;
+        }
+
+        const auto index = targetId - 1001;
+        auto& state = g_batchStates[index];
+        const bool legacyActive = g_targetId != 0 && g_batchActiveTarget == 0;
+        auto result = ResultCode::InvalidRequest;
+        if (type == CommandType::GetBatchStatus)
+            result = g_connected ? ResultCode::Success : ResultCode::AssetUnavailable;
+        else if (!g_connected || !g_available || legacyActive)
+            result = ResultCode::AssetUnavailable;
+        else if (type == CommandType::RegisterBatchTarget)
+        {
+            if (state != AssignmentState::Idle) result = ResultCode::AlreadyAssigned;
+            else if (g_rdrOperating && !g_batchPaused && !BatchContains(AssignmentState::ScanResumed) &&
+                     !g_targetKilled[index] && !g_targetRemoved[index])
+            {
+                state = AssignmentState::Confirmed;
+                result = ResultCode::Success;
+            }
+        }
+        else if (state == AssignmentState::Idle)
+            result = ResultCode::NotAssigned;
+        else if (type == CommandType::CancelBatchTarget)
+        {
+            if (state == AssignmentState::Firing || state == AssignmentState::ScanResumed)
+                result = ResultCode::StatusPending;
+            else
+            {
+                if (state == AssignmentState::FireConfirmed)
+                    g_releasedBatchHits[index] = g_batchHits[index];
+                if (g_batchActiveTarget == targetId)
+                {
+                    g_batchActiveTarget = g_targetId = 0;
+                    g_assignment = AssignmentState::Idle;
+                }
+                state = AssignmentState::Idle;
+                if (!BatchContains(AssignmentState::FireConfirmed) && !BatchContains(AssignmentState::Confirmed) &&
+                    g_batchActiveTarget == 0) g_batchPaused = false;
+                result = ResultCode::Success;
+            }
+        }
+        else if (type == CommandType::AimBatchTarget && state == AssignmentState::Confirmed &&
+                 g_batchActiveTarget == 0 && g_rdrOperating && g_batchPaused)
+        {
+            g_batchActiveTarget = g_targetId = targetId;
+            g_fcsTargetAzimuthDeg = TargetAzimuthFromFcs(targetId);
+            g_fcsTargetElevationDeg = TargetElevation(targetId);
+            g_fireState = 0;
+            g_assignment = state = AssignmentState::ManualAiming;
+            result = ResultCode::Success;
+        }
+        else if (type == CommandType::PauseBatchScan && g_rdrOperating && !g_batchPaused &&
+                 ((g_batchActiveTarget == 0 && state == AssignmentState::Confirmed) ||
+                  (g_batchActiveTarget == targetId && state == AssignmentState::Aimed)))
+        {
+            g_batchPaused = true;
+            if (g_batchActiveTarget == targetId)
+                g_assignment = state = AssignmentState::ScanPaused;
+            result = ResultCode::Success;
+        }
+        else if (type == CommandType::FireBatchTarget && targetId == g_batchActiveTarget &&
+                 state == AssignmentState::ScanPaused && g_batchPaused && g_rdrOperating)
+        {
+            if (fcsBusy) result = ResultCode::StatusPending;
+            else
+            {
+                g_batchHits[index] = g_shotMode == ShotMode::Hit ||
+                    (g_shotMode == ShotMode::Automatic && (targetId < 1005 || g_hasCompletedShot[index]));
+                g_assignment = state = AssignmentState::Firing;
+                g_laserOn = true;
+                g_laserOffAt = now + std::chrono::seconds(5);
+                g_fcsBusyUntil = g_laserOffAt + std::chrono::seconds(2);
+                result = ResultCode::Success;
+            }
+        }
+        else if (type == CommandType::ResumeBatchScan && g_rdrOperating && BatchReadyToResume())
+        {
+            if (g_batchActiveTarget != 0)
+            {
+                g_batchStates[g_batchActiveTarget - 1001] = AssignmentState::Confirmed;
+                g_batchActiveTarget = g_targetId = 0;
+                g_assignment = AssignmentState::Idle;
+            }
+            for (std::uint32_t i = 0; i < kMaxTargets; ++i)
+            {
+                if (g_batchStates[i] != AssignmentState::FireConfirmed) continue;
+                if (g_batchHits[i]) g_targetRemoved[i] = true;
+                g_batchStates[i] = AssignmentState::ScanResumed;
+            }
+            g_batchPaused = false;
+            ++g_observationRound;
+            result = ResultCode::Success;
+        }
+        else if (type == CommandType::RetryBatchTarget && state == AssignmentState::TargetStillPresent &&
+                 !g_batchPaused && !BatchContains(AssignmentState::ScanResumed))
+        {
+            state = AssignmentState::Confirmed;
+            result = ResultCode::Success;
+        }
+
+        response.resultCode = static_cast<std::uint32_t>(result);
+        response.assignedTargetId = targetId;
+        response.assignmentState = static_cast<std::uint32_t>(state);
+        // Batch status flags: scan paused, ready to resume, FCS free to aim, FCS ready to fire.
+        response.fireState = (g_batchPaused ? 1u : 0u) | (BatchReadyToResume() ? 2u : 0u) |
+            (g_batchActiveTarget == 0 && !legacyActive ? 4u : 0u) | (!fcsBusy ? 8u : 0u);
+        return response;
     }
 
     // WPF 명령을 검증하고 모의 응답 생성
@@ -537,6 +722,14 @@ namespace
         const auto now = std::chrono::steady_clock::now();
         const bool fcsBusy = now < g_fcsBusyUntil;
         const bool manualCommand = type >= CommandType::RegisterManualTarget && type <= CommandType::RetryManualAssignment;
+
+        if (type >= CommandType::GetBatchStatus && type <= CommandType::RetryBatchTarget)
+            return HandleBatchCommand(command, type, now, fcsBusy);
+        if ((manualCommand || type == CommandType::AssignTarget || type == CommandType::CancelAssignment ||
+             type == CommandType::Fire) && std::any_of(g_batchStates.begin(), g_batchStates.end(),
+                 [](auto state) { return state != AssignmentState::Idle; }))
+            return PipeResponse{ kPipeMagic, kPipeVersion, command.requestId, command.commandType,
+                static_cast<std::uint32_t>(ResultCode::DeviceError), 1, 0, 0, 0, g_connected ? 1u : 0u };
 
         const bool setAssetPosition = type == CommandType::SetAssetPosition;
         const bool cameraSettings = type == CommandType::GetCameraSettings || type == CommandType::SetCameraSettings;
@@ -555,7 +748,8 @@ namespace
                  type != CommandType::SetRdrElevation && type != CommandType::SetAssetPosition &&
                  type != CommandType::SetRdrOperating && type != CommandType::GetFcsBusy &&
                  type != CommandType::GetCameraSettings && type != CommandType::SetCameraSettings &&
-                 type != CommandType::GetRdrStartupStatus && !manualCommand)
+                 type != CommandType::GetRdrStartupStatus && type != CommandType::GetRdrLidarState &&
+                 type != CommandType::GetRdrSensorHealth && !manualCommand)
         {
             result = ResultCode::NotSupported;
         }
@@ -564,6 +758,8 @@ namespace
             switch (type)
             {
             case CommandType::GetStatus:
+            case CommandType::GetRdrLidarState:
+            case CommandType::GetRdrSensorHealth:
                 break;
 
             case CommandType::GetFcsBusy:
@@ -609,7 +805,7 @@ namespace
             case CommandType::SetRdrOperating:
                 if (!g_connected) result = ResultCode::AssetUnavailable;
                 else if (command.rdrId != 1 || command.targetId > 1) result = ResultCode::InvalidRequest;
-                else if (IsManualScanPaused()) result = ResultCode::LidarBusy;
+                else if (IsManualScanPaused() || BatchContains(AssignmentState::ScanResumed)) result = ResultCode::LidarBusy;
                 else { g_rdrOperating = command.targetId == 1; Print(g_rdrOperating ? L"[RDR] 라이다 구동" : L"[RDR] 라이다 정지"); }
                 break;
 
@@ -769,12 +965,20 @@ namespace
             response.assignedTargetId = FloatBits(values[1]);
             response.assignmentState = FloatBits(values[2]);
         }
+        if (type == CommandType::GetRdrLidarState || type == CommandType::GetRdrSensorHealth)
+        {
+            const bool emissionQuery = type == CommandType::GetRdrLidarState;
+            response.assignedTargetId = emissionQuery ? 0u : 255u;
+            response.assignmentState = g_connected && emissionQuery ? 1u : 0u;
+            response.fireState = g_connected && emissionQuery && g_rdrOperating && !IsManualScanPaused() ? 1u : 0u;
+        }
         return response;
     }
 
     // 수신한 명령과 생성한 응답을 한글로 출력
     void PrintRequestResponse(const PipeCommand& request, const PipeResponse& response)
     {
+        if (request.commandType == static_cast<std::uint32_t>(CommandType::GetBatchStatus)) return;
         std::wostringstream line;
         line << L"[파이프 요청 " << request.requestId << L"] "
              << CommandName(request.commandType)
@@ -878,6 +1082,11 @@ namespace
         g_targetRemoved.fill(false);
         g_shotMode = ShotMode::Automatic;
         g_hasCompletedShot.fill(false);
+        g_batchPaused = false;
+        g_batchActiveTarget = 0;
+        g_batchStates.fill(AssignmentState::Idle);
+        g_batchHits.fill(false);
+        g_releasedBatchHits.fill(false);
     }
 
     // 콘솔 입력값을 연결/사용 가능 상태로 변환
