@@ -296,6 +296,9 @@ public partial class MainWindow : Window
     private bool _rdrEmissionPolling;
     private bool? _rdrEmissionOn;
     private long _rdrEmissionAt;
+    private uint? _rdrThermalState;
+    private bool _rdrThermalStop;
+    private long _rdrThermalAt;
     private string _lastEmissionText = "";
     private void UpdateRdrEmissionLine()
     {
@@ -304,7 +307,14 @@ public partial class MainWindow : Window
         bool connected = _isSharedMemoryLive && rdr?.IsConnected == true;
         bool? emission = connected && Environment.TickCount64 - _rdrEmissionAt < 3200 ? _rdrEmissionOn : null;
         var text = connected ? LidarEmissionStatus.Text(rdr!.IsOperating, emission) : "RDR 연결 대기 / 방출 상태 확인 불가";
-        RdrEmissionLine.Text = text;
+        bool thermalFresh = connected && Environment.TickCount64 - _rdrThermalAt < 2500;
+        var thermal = thermalFresh ? _rdrThermalState : null;
+        bool protection = thermalFresh && _rdrThermalStop;
+        RdrThermalLine.Text = connected ? LidarEmissionStatus.ThermalText(thermal, protection) : "온도 상태 확인 불가 · RDR 연결 대기";
+        RdrThermalLine.Foreground = protection || thermal == 9 ? Brushes.OrangeRed :
+            thermal is 7 or 8 || thermal is null ? Brushes.Orange : Brushes.LightGreen;
+        text += " / " + RdrThermalLine.Text;
+        RdrEmissionLine.Text = connected ? LidarEmissionStatus.Text(rdr!.IsOperating, emission) : "RDR 연결 대기 / 방출 상태 확인 불가";
         RdrEmissionLine.Foreground = emission.HasValue ? Brushes.LightGreen : Brushes.Orange;
         if (_lastEmissionText != text) { AddLog($"RDR · {text}"); _lastEmissionText = text; }
     }
@@ -319,8 +329,15 @@ public partial class MainWindow : Window
             _rdrEmissionOn = (ResultCode)response.ResultCode == ResultCode.Success && response.IsConnected == 1 && response.AssignmentState == 1
                 ? response.FireState == 1 : null;
             _rdrEmissionAt = Environment.TickCount64;
+            var health = await _pipeClient.SendAsync(CommandType.GetRdrSensorHealth, cancellationToken: timeout.Token);
+            bool validReply = (ResultCode)health.ResultCode == ResultCode.Success && health.IsConnected == 1
+                && health.AssignmentState <= 1 && health.FireState <= 1 && health.AssignedTargetId <= 255;
+            _rdrThermalState = validReply && health.AssignmentState == 1 && health.AssignedTargetId != 255
+                ? health.AssignedTargetId : null;
+            _rdrThermalStop = validReply && health.FireState == 1;
+            _rdrThermalAt = Environment.TickCount64;
         }
-        catch { _rdrEmissionOn = null; }
+        catch { _rdrEmissionOn = null; _rdrThermalState = null; _rdrThermalStop = false; _rdrThermalAt = 0; }
         finally { _rdrEmissionPolling = false; UpdateRdrEmissionLine(); }
     }
     private async Task RefreshRdrStartupAsync()
@@ -488,7 +505,7 @@ public partial class MainWindow : Window
     private void RefreshRdrInfo(RdrAsset? rdr)
     {
         if (RdrIdText is null) return;
-        if (!_isSharedMemoryLive || rdr?.IsConnected != true) _rdrEmissionOn = null;
+        if (!_isSharedMemoryLive || rdr?.IsConnected != true) { _rdrEmissionOn = null; _rdrThermalState = null; _rdrThermalStop = false; _rdrThermalAt = 0; }
         UpdateRdrEmissionLine();
         if (!_isSharedMemoryLive || rdr is null)
         {
@@ -1013,6 +1030,8 @@ public partial class MainWindow : Window
         ResultCode.LidarUnsupported => "RDR 펌웨어가 라이다 방출 제어를 지원하지 않습니다. ED07/DE07 지원 버전으로 업데이트해 주세요",
         ResultCode.LidarUnknown => "RDR의 실제 라이다 방출 상태가 확인되지 않았습니다",
         ResultCode.LidarRecoveryRequired => "라이다 연동이 진행 중이거나 복구가 필요합니다. 진행 중인 작업을 확인하고 취소 후 다시 시도해 주세요",
+        ResultCode.LidarThermalFault => "라이다 센서가 고온 오류를 보고하여 보호 정지했습니다. 온도와 장치 상태를 확인한 뒤 복구해 주세요",
+        ResultCode.LidarStopWarningUnconfirmed => "온도 경고가 보고된 상태에서 라이다 중지 명령의 완료를 확인하지 못했습니다. 작업이 보류되었습니다",
         ResultCode.LidarStopUnconfirmed => "라이다 정지 및 실행 준비 확인에 실패했습니다. RDR·FCS 상태와 ECS 로그를 확인해 주세요",
         ResultCode.LidarDisconnected => "RDR 연결이 끊겨 라이다 정지를 확인할 수 없습니다",
         ResultCode.LidarResumeUnconfirmed => "RDR 구동 준비는 완료됐지만 SDK 재개 명령이 실패했거나 응답이 없습니다. ED07/DE07 응답을 확인해 주세요",
@@ -1228,6 +1247,8 @@ public sealed class AssignmentView : INotifyPropertyChanged
         ResultCode.DeviceFault => "진행 중단 · FCS 장치 오류",
         ResultCode.AlignmentRequired => "진행 중단 · 조준 정렬 확인 실패",
         ResultCode.LidarDisconnected => "진행 중단 · RDR 연결 끊김 또는 세션 변경",
+        ResultCode.LidarThermalFault => "진행 중단 · 센서 고온 오류로 보호 정지",
+        ResultCode.LidarStopWarningUnconfirmed => "진행 중단 · 온도 경고 동반 / 중지 완료 확인 실패",
         ResultCode.LidarStopUnconfirmed => "진행 중단 · 라이다 정지 상태 확인 실패",
         ResultCode.LidarResumeUnconfirmed => "진행 중단 · 라이다 재개 확인 실패",
         ResultCode.LidarUnknown => "진행 중단 · 라이다 방출 상태 확인 불가",

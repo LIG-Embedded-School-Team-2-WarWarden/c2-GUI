@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 
@@ -7,6 +7,14 @@ namespace AadcCommandCenter;
 /// <summary>ECS에 보낼 Named Pipe 명령 종류</summary>
 internal enum CommandType : uint
 {
+    CalibrationPoint = 1100,
+    CalibrationReference = 1101,
+    CalibrationFeedback = 1102,
+    ReadGeometryTranslation = 1110,
+    ReadGeometryRotation = 1111,
+    StageGeometryTranslation = 1112,
+    StageGeometryRotation = 1113,
+    CommitGeometry = 1114,
     GetStatus = 0,          // 현재 연결과 객체 할당 상태 조회
     AssignTarget = 1,       // 객체를 FCS에 할당
     CancelAssignment = 2,   // 현재 객체 할당 취소
@@ -15,6 +23,7 @@ internal enum CommandType : uint
     SetAssetPosition = 5,   // 자산 좌표 설정, X/Y/Z는 미터 단위
     SetRdrOperating = 6,    // RDR 동작 상태 설정, TargetId: 0=비활성, 1=작동
     GetRdrStartupStatus = 18,
+    GetRdrSensorHealth = 20, // AssignedTargetId=SDK state, AssignmentState=valid, FireState=protective latch.
     GetRdrLidarState = 19, // AssignmentState=known(0/1), FireState=known ON(0/1).
     GetCameraSettings = 8,
     SetCameraSettings = 9,
@@ -59,7 +68,9 @@ internal enum ResultCode : uint
     FcsOffUnconfirmed = 22,
     RdrStartUnconfirmed = 23,
     ResultUnconfirmed = 24,
-    PauseTimeout = 25
+    PauseTimeout = 25,
+    LidarThermalFault = 26,
+    LidarStopWarningUnconfirmed = 27
 }
 
 /// <summary>FCS의 객체 할당 진행 상태</summary>

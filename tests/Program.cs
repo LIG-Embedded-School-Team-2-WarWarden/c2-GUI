@@ -15,6 +15,11 @@ static class Checks
         Check(LidarEmissionStatus.Text(true,null)=="구동 중 / 방출 상태 미확인", "unknown was confused with OFF");
         Check(LidarEmissionStatus.Text(true,false).Contains("OFF 확인"), "confirmed OFF missing");
         Check(LidarEmissionStatus.Text(true,true).Contains("ON 확인"), "confirmed ON missing");
+        Check(LidarEmissionStatus.ThermalText(7,false).Contains("중단하지 않음"), "warning must be nonblocking");
+        Check(LidarEmissionStatus.ThermalText(8,false).Contains("주파수 저하"), "down-frequency classification");
+        Check(LidarEmissionStatus.ThermalText(9,false).Contains("보호 정지"), "high-temperature protection");
+        Check(LidarEmissionStatus.ThermalText(null,false).Contains("미확인"), "unknown must not look normal");
+        Check(LidarEmissionStatus.ThermalText(3,true).Contains("자동 재개 안 함"), "protection must survive cooling");
         var window = new MainWindow();
         try
         {
@@ -27,6 +32,17 @@ static class Checks
                 fcsAssets=new[]{new SharedFcsAsset { fcsId=1,isEnabled=1,isOperating=1,isConnected=1 }},
                 targets=new[]{new SharedTarget { targetId=id,rdrId=1,lidarX=1,lidarY=3,lidarZ=.5f,distanceM=3.2f,status=status,valid=valid }} }};
             apply.Invoke(window,new object[]{Frame(0,1)});
+            void SetThermal(uint? state, bool protection, long age = 0) {
+                typeof(MainWindow).GetField("_rdrThermalState",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(window,state);
+                typeof(MainWindow).GetField("_rdrThermalStop",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(window,protection);
+                typeof(MainWindow).GetField("_rdrThermalAt",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(window,Environment.TickCount64-age);
+                typeof(MainWindow).GetMethod("UpdateRdrEmissionLine",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(window,null);
+            }
+            var thermalLine=(TextBlock)window.FindName("RdrThermalLine");
+            SetThermal(7,false);Check(thermalLine.Text.Contains("중단하지 않음"),"warning view missing");
+            SetThermal(9,true);Check(thermalLine.Text.Contains("보호 정지"),"protection view missing");
+            SetThermal(7,false,3000);Check(thermalLine.Text.Contains("미확인"),"stale temperature retained");
+            SetThermal(7,false);
             var original=(TargetRecord)grid.Items[0]; original.SelectedFcsId=1;
             Check(original.CanAssign,"observed should be usable");
             apply.Invoke(window,new object[]{Frame(4,0)});
@@ -62,6 +78,7 @@ static class Checks
                 f => apply.Invoke(window,new object[]{f}), () => grid.Items.Count, CanAim);
             Check(!CanAim() && assignment.LidarXText == "—", "offline assignment remained usable");
             Check(((TextBlock)window.FindName("RdrEmissionLine")).Text.Contains("확인 불가"), "offline emission status retained");
+            Check(((TextBlock)window.FindName("RdrThermalLine")).Text.Contains("연결 대기"),"offline thermal status retained");
             Check(assignment.Stages[^1].ActionLabel is null, "offline result button remained visible");
             var manualStatus = typeof(AssignmentView).GetMethod("SetManualStatus", BindingFlags.NonPublic|BindingFlags.Instance)!;
             void Manual(AssignmentView view, string stateName, string reasonName, uint step) => manualStatus.Invoke(view,
@@ -76,6 +93,8 @@ static class Checks
             Manual(restored,"Failed","StatusPending",6);restored.Refresh(null,null);
             Check(restored.Stages.Take(3).All(s=>s.Status=="완료")&&restored.Stages[3].Status=="중단","post-fire failure progress wrong");
             Check(restored.StateText.Contains("FCS"),"failure reason not distinguished");
+            Manual(restored,"Failed","LidarThermalFault",4);Check(restored.StateText.Contains("고온 오류"),"thermal reason lost");
+            Manual(restored,"Failed","LidarStopWarningUnconfirmed",4);Check(restored.StateText.Contains("온도 경고"),"warning reason lost");
             Manual(restored,"Confirmed","Success",2);restored.Refresh(null,null);
             Check(!restored.Stages.Any(s=>s.Status=="완료"),"retry kept old completion");
             Manual(restored,"FireConfirmed","Success",6);restored.Refresh(null,null);
