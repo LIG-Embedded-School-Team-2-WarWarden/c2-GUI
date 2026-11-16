@@ -1,4 +1,4 @@
-using AadcCommandCenter;
+﻿using AadcCommandCenter;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -99,6 +99,12 @@ static class Checks
             Check(!restored.Stages.Any(s=>s.Status=="완료"),"retry kept old completion");
             Manual(restored,"FireConfirmed","Success",6);restored.Refresh(null,null);
             Check(restored.Stages[3].CanAdvance&&restored.Stages[3].Status=="재개 대기","manual resume unavailable");
+            Manual(restored,"TargetStillPresent","Success",8);restored.Refresh(null,null);
+            Check(restored.Stages[^1].ActionLabel=="할당 해제"&&restored.Stages[^1].CanAdvance,"missing ID must offer release instead of broken retry");
+            Check(restored.Stages[^1].Status.Contains("이전 ID 없음"),"missing ID explanation absent");
+            apply.Invoke(window,new object[]{Frame(0,1)});
+            restored.Refresh((TargetRecord)grid.Items[0],null);
+            Check(restored.Stages[^1].ActionLabel=="다시 시도","same-ID retry must remain available");
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
         finally { window.Close(); app.Shutdown(); }

@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Diagnostics;
@@ -1026,6 +1026,7 @@ public partial class MainWindow : Window
         ResultCode.ResultUnconfirmed => "동일 ID의 재관측을 3초 안에 확인하지 못했습니다",
         ResultCode.PauseTimeout => "촬영 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
+        ResultCode.TargetPending => "기존 대상의 최신 관측을 확인할 수 없습니다. 할당을 해제한 뒤 현재 객체 목록에서 대상을 다시 선택하세요.",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
         ResultCode.LidarUnsupported => "RDR 펌웨어가 라이다 방출 제어를 지원하지 않습니다. ED07/DE07 지원 버전으로 업데이트해 주세요",
         ResultCode.LidarUnknown => "RDR의 실제 라이다 방출 상태가 확인되지 않았습니다",
@@ -1322,6 +1323,9 @@ public sealed class AssignmentView : INotifyPropertyChanged
             var result = _commandState switch
             {
                 AssignmentState.ResultConfirmed => new AssignmentStage(StageLabels[4], "완료 · HIT", true, "할당 해제", true)
+                    { Command = CommandType.CancelAssignment },
+                AssignmentState.TargetStillPresent when target?.CanAssign != true =>
+                    new AssignmentStage(StageLabels[4], "이전 ID 없음 · 현재 목록에서 다시 선택", true, "할당 해제", true)
                     { Command = CommandType.CancelAssignment },
                 AssignmentState.TargetStillPresent => new AssignmentStage(StageLabels[4], "ALIVE", true, "다시 시도", true)
                     { Command = CommandType.RetryManualAssignment },
