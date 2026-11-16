@@ -765,13 +765,6 @@ public partial class MainWindow : Window
             ShowAlert("생존 상태인 객체만 할당할 수 있습니다.", "객체 할당");
             return;
         }
-        var occupiedAssignment = _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id && x.TargetId != target.Id && x.IsActiveCommandState);
-        if (!_supportsBatchAssignments && occupiedAssignment is not null)
-        {
-            AddLog($"객체 할당 거부 · {fcs.DisplayName} 이미 {occupiedAssignment.TargetName}에 할당됨");
-            ShowAlert($"{fcs.DisplayName}은(는) 이미 {occupiedAssignment.TargetName}에 할당된 FCS입니다.\n기존 할당을 취소한 뒤 다시 시도하세요.", "이미 할당된 FCS");
-            return;
-        }
         if (_pendingFcsAssignments.Contains(fcs.Id))
         {
             AddLog($"객체 할당 중복 클릭 무시 · {fcs.DisplayName} 연결 시도 중");
@@ -799,6 +792,15 @@ public partial class MainWindow : Window
             _data.Assignments.Add(assignment);
         }
         else assignment.FcsId = fcs.Id;
+        if (!_supportsBatchAssignments && LegacySlotOccupied(assignment))
+        {
+            assignment.AwaitingEcsSlot = true;
+            _assignedTargets.Add(target.Id);
+            target.IsAssigned = true;
+            RefreshAssignments();
+            AddLog($"객체 할당 목록 등록 · {target.DisplayName} → {fcs.DisplayName} · 처리 대기");
+            return;
+        }
         assignment.SetConnecting();
         target.IsAssignmentPending = true;
         _pendingFcsAssignments.Add(fcs.Id);
@@ -808,6 +810,11 @@ public partial class MainWindow : Window
         PipeResponse? response;
         try
         {
+            if (!_supportsBatchAssignments)
+            {
+                var capability = await SendPipeCommandAsync(CommandType.GetBatchStatus, target.RdrId, fcs.Id, 0, "ECS 할당 기능 확인", showConnectionAlert: false);
+                _supportsBatchAssignments = capability is { ResultCode: (uint)ResultCode.Success };
+            }
             var register = _supportsBatchAssignments ? CommandType.RegisterBatchTarget : CommandType.RegisterManualTarget;
             response = await SendPipeCommandAsync(register, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false);
         }
@@ -856,6 +863,12 @@ public partial class MainWindow : Window
     private async void AssignmentListActionClick(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { DataContext: AssignmentView assignment } || !assignment.CanUseListAction) return;
+        if (assignment.AwaitingEcsSlot)
+        {
+            RemoveAssignment(assignment);
+            RefreshAssignments();
+            return;
+        }
 
         var action = new AssignmentStage("할당 해제", "", CanAdvance: true)
         {
@@ -883,6 +896,9 @@ public partial class MainWindow : Window
         if (!EnsureSharedMemoryLiveForCommand(stage.Label)) return;
 
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
+        bool startingDeferred = assignment.AwaitingEcsSlot && command == CommandType.RegisterManualTarget;
+        if (startingDeferred && (LegacySlotOccupied(assignment) || target?.CanAssign != true ||
+            _pendingFcsAssignments.Contains(assignment.FcsId))) return;
         if ((command is CommandType.StartManualAim or CommandType.PauseManualScan) &&
             target?.CanAssign != true)
         {
@@ -896,15 +912,19 @@ public partial class MainWindow : Window
         {
             var response = await SendPipeCommandAsync(command, target?.RdrId ?? 1, assignment.FcsId, assignment.TargetId, stage.Label);
             if (response is null) return;
-            ApplyCommandResponse(response.Value);
             var result = (ResultCode)response.Value.ResultCode;
+            if (!startingDeferred || result == ResultCode.Success)
+            {
+                if (startingDeferred) assignment.AwaitingEcsSlot = false;
+                ApplyCommandResponse(response.Value);
+            }
             if (result == ResultCode.Success) AddLog($"{stage.Label} · {assignment.TargetName} → {assignment.FcsName}");
             else ShowAlert(CommandResultText(result), stage.Label);
         }
         finally
         {
             assignment.SetStageCommandPending(false);
-            RefreshAssignmentScanControls();
+            RefreshAssignments();
         }
     }
 
@@ -943,6 +963,8 @@ public partial class MainWindow : Window
             var response = await _pipeClient.SendAsync(CommandType.GetManualStatus, rdrId: 1, fcsId: 1);
             if ((ResultCode)response.ResultCode == ResultCode.NotSupported)
                 response = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: 1, fcsId: 1);
+            if (_pendingFcsAssignments.Count > 0 ||
+                _data.Assignments.Any(row => row.IsStageCommandPending)) return;
             SetCommandPipeOnline(true);
             ApplyCommandResponse(response);
         }
@@ -1013,17 +1035,12 @@ public partial class MainWindow : Window
             }
         }
         if (response.AssignedTargetId == 0 && state == AssignmentState.Idle &&
-            !(response.CommandType == (uint)CommandType.GetStatus && _pendingFcsAssignments.Contains(response.FcsId)))
+            !((CommandType)response.CommandType is CommandType.GetStatus or CommandType.GetManualStatus &&
+              _pendingFcsAssignments.Contains(response.FcsId)))
         {
-            foreach (var current in _data.Assignments.Where(current => current.FcsId == response.FcsId).ToArray())
-            {
-                _assignmentsByTarget.Remove(current.TargetId);
-                _assignedTargets.Remove(current.TargetId);
-                var oldTarget = _data.Targets.FirstOrDefault(x => x.Id == current.TargetId);
-                if (oldTarget is not null) { oldTarget.IsAssigned = false; oldTarget.IsAssignmentPending = false; }
-                _data.Assignments.Remove(current);
-            }
-            RefreshAssignmentEmptyState();
+            foreach (var current in _data.Assignments.Where(current => current.FcsId == response.FcsId && !current.AwaitingEcsSlot).ToArray())
+                RemoveAssignment(current);
+            RefreshAssignments();
             _previousAssignmentState = state;
             return;
         }
@@ -1091,8 +1108,8 @@ public partial class MainWindow : Window
         AssignmentState.ManualAiming => "FCS 조준 중",
         AssignmentState.Aimed => "조준 완료",
         AssignmentState.ScanPaused => "라이다 조사 중지 완료",
-        AssignmentState.Firing => "발사 중",
-        AssignmentState.FireConfirmed => "발사 완료",
+        AssignmentState.Firing => "실행 중",
+        AssignmentState.FireConfirmed => "실행 완료",
         AssignmentState.ScanResumed => "조사 재개 완료 · 결과 판정 중",
         AssignmentState.ResultConfirmed => "결과 확인 · HIT",
         AssignmentState.TargetStillPresent => "결과 확인 · 객체 유지",
@@ -1105,11 +1122,11 @@ public partial class MainWindow : Window
         ResultCode.InvalidRequest => "요청 값이 올바르지 않습니다",
         ResultCode.AssetUnavailable => "FCS을 사용할 수 없습니다",
         ResultCode.NotAssigned => "FCS에 할당된 객체가 없습니다",
-        ResultCode.AlreadyAssigned => "FCS에 이미 다른 객체가 할당되어 있습니다",
+        ResultCode.AlreadyAssigned => "ECS에 이미 할당된 객체가 있습니다. 진행 중인 할당 정보를 확인하세요",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
         ResultCode.ResultUnconfirmed => "동일 ID의 재관측을 3초 안에 확인하지 못했습니다",
-        ResultCode.PauseTimeout => "발사 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
+        ResultCode.PauseTimeout => "실행 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
         ResultCode.TargetPending => "기존 대상의 최신 관측을 확인할 수 없습니다. 할당을 해제한 뒤 현재 객체 목록에서 대상을 다시 선택하세요.",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
@@ -1175,12 +1192,29 @@ public partial class MainWindow : Window
             ?? _data.Assignments.FirstOrDefault(row => row.CanOfferBatchResume);
         foreach (var assignment in _data.Assignments)
         {
+            assignment.EcsSlotAvailable = assignment.AwaitingEcsSlot && _isCommandPipeLive && !LegacySlotOccupied(assignment);
             assignment.ShowBatchResume = ReferenceEquals(assignment, resumeRow);
             var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
             var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
             assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null, _isSharedMemoryLive);
         }
         RefreshAssignmentEmptyState();
+    }
+
+    private bool LegacySlotOccupied(AssignmentView waiting) => _data.Assignments.Any(row =>
+        row.FcsId == waiting.FcsId && row.TargetId != waiting.TargetId && !row.AwaitingEcsSlot);
+
+    private void RemoveAssignment(AssignmentView assignment)
+    {
+        _assignmentsByTarget.Remove(assignment.TargetId);
+        _assignedTargets.Remove(assignment.TargetId);
+        var target = _data.Targets.FirstOrDefault(row => row.Id == assignment.TargetId);
+        if (target is not null)
+        {
+            target.IsAssigned = false;
+            target.IsAssignmentPending = false;
+        }
+        _data.Assignments.Remove(assignment);
     }
 
     private void RefreshAssignmentEmptyState()
@@ -1240,7 +1274,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
 {
     private static readonly string[] StageLabels =
     [
-        "1. 조준", "2. 조사 중지", "3. 발사", "4. 조사 재개", "5. 결과 확인"
+        "1. 조준", "2. 조사 중지", "3. 실행", "4. 조사 재개", "5. 결과 확인"
     ];
     private uint _fcsId;
     private string _azimuthText = "—", _elevationText = "—", _distanceText = "—", _lidarXText = "—", _lidarYText = "—", _lidarZText = "—", _rdrIdText = "—", _targetStatusText = "WAITING", _stateText = "명령 파이프 대기";
@@ -1282,6 +1316,8 @@ public sealed class AssignmentView : INotifyPropertyChanged
     public bool IsStageCommandPending { get; private set; }
     internal bool IsConnecting => _connectionPending;
     internal bool IsBatch { get; set; }
+    internal bool AwaitingEcsSlot { get; set; }
+    internal bool EcsSlotAvailable { get; set; }
     internal bool IsFiring => _commandState == AssignmentState.Firing;
     internal bool HasUnfiredAim => _commandState is AssignmentState.ManualAiming or AssignmentState.ScanPaused;
     internal bool HasCommandState(AssignmentState state) => _commandState == state;
@@ -1295,14 +1331,15 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _commandState is AssignmentState.ScanPaused or AssignmentState.Firing or AssignmentState.FireConfirmed;
     public AssignmentStage PrimaryAction => _commandState switch
     {
+        _ when AwaitingEcsSlot => Stages[0] with { ActionLabel = "처리 시작" },
         AssignmentState.TargetStillPresent when Stages[4].ActionLabel == "다시 시도" => Stages[4],
         AssignmentState.Confirmed when IsBatch && !IsScanPaused =>
             Stages[0] with { ActionLabel = "조사 일시 정지 필요", CanAdvance = false },
-        _ when ManualCompletedStep >= 3 && _commandState != AssignmentState.Failed => Stages[2] with { ActionLabel = "발사" },
+        _ when ManualCompletedStep >= 3 && _commandState != AssignmentState.Failed => Stages[2] with { ActionLabel = "실행" },
         _ => Stages[0] with { ActionLabel = "조준" }
     };
     public bool CanUsePrimaryAction => StageCommandsEnabled && PrimaryAction.CanAdvance &&
-        (PrimaryAction.ActionLabel != "발사" || CanFireFromList);
+        (PrimaryAction.ActionLabel != "실행" || CanFireFromList);
     public bool CanFireFromList => StageCommandsEnabled && IsScanPaused && Stages[2].CanAdvance;
     public string? ListActionLabel => Stages[0].Status.Length == 0 ? null : "할당 해제";
     public bool CanUseListAction => StageCommandsEnabled && ListActionLabel is not null &&
@@ -1376,7 +1413,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     private string FailureText => _failureReason switch
     {
         ResultCode.ResultUnconfirmed => "결과 미확정 · 동일 ID 재관측 시간 초과 (3초)",
-        ResultCode.PauseTimeout => "진행 중단 · 발사 완료 전 조사 중지 제한 초과 (10초)",
+        ResultCode.PauseTimeout => "진행 중단 · 실행 완료 전 조사 중지 제한 초과 (10초)",
         ResultCode.StatusPending => "진행 중단 · FCS 연결 또는 최신 상태 확인 불가",
         ResultCode.TargetPending => "진행 중단 · RDR 관측/보고 상태 확인 불가",
         ResultCode.TargetChanged => "진행 중단 · 대상 위치 또는 관측 세션 변경",
@@ -1434,6 +1471,14 @@ public sealed class AssignmentView : INotifyPropertyChanged
     private void RefreshStages(TargetRecord? target)
     {
         if (!HasAssignment) return;
+        if (AwaitingEcsSlot)
+        {
+            var waitingStages = StageLabels.Select(label => new AssignmentStage(label, "대기")).ToArray();
+            waitingStages[0] = new AssignmentStage("처리 시작", "대기", ActionLabel: "처리 시작",
+                CanAdvance: EcsSlotAvailable && target?.CanAssign == true) { Command = CommandType.RegisterManualTarget };
+            UpdateStages(waitingStages);
+            return;
+        }
 
         int completed = ManualCompletedStep;
         if (_commandState == AssignmentState.Failed)
@@ -1485,8 +1530,8 @@ public sealed class AssignmentView : INotifyPropertyChanged
                 new(StageLabels[1], completed >= 4 || batchPaused ? "완료" : "대기", canPause,
                     IsBatch && batchPaused ? null : "중지", canPause)
                     { Command = IsBatch ? CommandType.PauseBatchScan : CommandType.PauseManualScan },
-                new(StageLabels[2], completed >= 6 ? "완료" : firing ? "발사 중" : "대기", completed is 4 or 5,
-                    "발사", canFire) { Command = IsBatch ? CommandType.FireBatchTarget : CommandType.StartManualFire },
+                new(StageLabels[2], completed >= 6 ? "완료" : firing ? "실행 중" : "대기", completed is 4 or 5,
+                    "실행", canFire) { Command = IsBatch ? CommandType.FireBatchTarget : CommandType.StartManualFire },
                 new(StageLabels[3], completed >= 7 ? "완료" : completed == 6 ?
                     "재개 대기" : canResume ? "재개 가능" : "대기", canResume,
                     IsBatch ? (canResume ? "조사 재개" : null) : "재개", canResume)
@@ -1530,6 +1575,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
 
     private void RefreshStateText(TargetRecord? target, FcsAsset? fcs)
     {
+        if (AwaitingEcsSlot) { StateText = EcsSlotAvailable ? "처리 시작 대기" : "FCS 사용 대기"; return; }
         if (_connectionPending) { StateText = "연결 시도 중"; return; }
         if (_connectionFailed) { StateText = "연결 실패 · 재시도 가능"; return; }
         if (_commandState == AssignmentState.Failed) { StateText = FailureText; return; }

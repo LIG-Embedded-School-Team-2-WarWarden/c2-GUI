@@ -493,8 +493,8 @@ namespace
         case CommandType::ConfirmManualAssignment: return L"수동 할당";
         case CommandType::StartManualAim: return L"수동 조준";
         case CommandType::PauseManualScan: return L"조사 중지";
-        case CommandType::StartManualFire: return L"발사";
-        case CommandType::ConfirmManualFire: return L"발사 완료 확인";
+        case CommandType::StartManualFire: return L"실행";
+        case CommandType::ConfirmManualFire: return L"실행 완료 확인";
         case CommandType::ResumeManualScan: return L"조사 재개";
         case CommandType::ConfirmManualResult: return L"결과 확인";
         case CommandType::RetryManualAssignment: return L"다시 시도";
@@ -532,8 +532,8 @@ namespace
         case AssignmentState::ManualAiming: return L"수동 조준 중";
         case AssignmentState::Aimed: return L"조준 완료";
         case AssignmentState::ScanPaused: return L"조사 중지";
-        case AssignmentState::Firing: return L"발사 중";
-        case AssignmentState::FireConfirmed: return L"발사 완료";
+        case AssignmentState::Firing: return L"실행 중";
+        case AssignmentState::FireConfirmed: return L"실행 완료";
         case AssignmentState::ScanResumed: return L"조사 재개";
         case AssignmentState::ResultConfirmed: return L"결과 확인";
         case AssignmentState::TargetStillPresent: return L"객체 유지";
@@ -1134,7 +1134,7 @@ int wmain()
             {
                 std::lock_guard<std::mutex> lock(g_stateMutex);
                 g_shotMode = value == L"hit" ? ShotMode::Hit : value == L"miss" ? ShotMode::Miss : ShotMode::Automatic;
-                Print(L"[모의 상태] 발사 모드: " + value);
+                Print(L"[모의 상태] 실행 모드: " + value);
             }
         }
         else if (command == L"connected" || command == L"available")
