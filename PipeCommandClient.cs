@@ -37,7 +37,15 @@ internal enum CommandType : uint
     ResumeManualScan = 1007,
     ConfirmManualResult = 1008,
     RetryManualAssignment = 1009,
-    GetManualStatus = 1010 // ResultCode=실패 사유, FireState=마지막 진행 단계(0~8)
+    GetManualStatus = 1010, // ResultCode=실패 사유, FireState=마지막 진행 단계(0~8)
+    GetBatchStatus = 1200,
+    RegisterBatchTarget = 1201,
+    CancelBatchTarget = 1202,
+    AimBatchTarget = 1203,
+    PauseBatchScan = 1204,
+    FireBatchTarget = 1205,
+    ResumeBatchScan = 1206,
+    RetryBatchTarget = 1207
 }
 
 /// <summary>Named Pipe 명령 처리 결과</summary>

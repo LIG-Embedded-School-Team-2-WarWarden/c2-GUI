@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private bool _isSharedMemoryLive;
     private bool _isCommandPipeLive;
     private bool _isRefreshingCommandStatus;
+    private bool _supportsBatchAssignments;
     private bool? _previousConnectionState;
     private AssignmentState? _previousAssignmentState;
     private string? _previousAssignmentStatusText;
@@ -51,7 +52,7 @@ public partial class MainWindow : Window
         RdrSelector.ItemsSource = _data.RdrAssets;
         FcsSelector.ItemsSource = _data.FcsAssets;
         TargetGrid.ItemsSource = _data.Targets;
-        AssignmentEmptyState.Content = new AssignmentView(0, 0);
+        RefreshAssignmentEmptyState();
         LoadPersistentEventLog();
         AddLog($"프로그램 시작 · 로그파일 {_eventLogPath}");
         _frameReader = new SharedMemoryFrameReader();
@@ -644,7 +645,8 @@ public partial class MainWindow : Window
         }
 
         var fcsPoint = fcs is null ? (Point?)null : Map(fcsX, fcsY);
-        var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id)?.TargetId;
+        var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(
+            row => row.FcsId == fcs.Id && (!row.IsBatch || row.IsFiring))?.TargetId;
         var laserTarget = targets.FirstOrDefault(x => x.Id == assignedTargetId);
         if (fcs?.LaserOn == true && fcsPoint is Point fp && laserTarget is not null)
         {
@@ -744,6 +746,11 @@ public partial class MainWindow : Window
     {
         if (!EnsureSharedMemoryLiveForCommand("객체 할당")) return;
         if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("객체 할당 거부 · 객체 행을 확인할 수 없음"); return; }
+        if (target.Status == 4 || _data.Assignments.Any(row => row.IsScanPaused))
+        {
+            ShowAlert("객체를 할당하려면 먼저 조사를 재개하세요.", "조사 재개 필요");
+            return;
+        }
         AddLog($"객체 할당 버튼 클릭 · {target.DisplayName}");
         var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == target.SelectedFcsId);
         if (fcs is null)
@@ -759,7 +766,7 @@ public partial class MainWindow : Window
             return;
         }
         var occupiedAssignment = _data.Assignments.FirstOrDefault(x => x.FcsId == fcs.Id && x.TargetId != target.Id && x.IsActiveCommandState);
-        if (occupiedAssignment is not null)
+        if (!_supportsBatchAssignments && occupiedAssignment is not null)
         {
             AddLog($"객체 할당 거부 · {fcs.DisplayName} 이미 {occupiedAssignment.TargetName}에 할당됨");
             ShowAlert($"{fcs.DisplayName}은(는) 이미 {occupiedAssignment.TargetName}에 할당된 FCS입니다.\n기존 할당을 취소한 뒤 다시 시도하세요.", "이미 할당된 FCS");
@@ -799,7 +806,11 @@ public partial class MainWindow : Window
         AddLog($"{target.DisplayName} → {fcs.DisplayName} 명령 파이프 연결 시도 중");
 
         PipeResponse? response;
-        try { response = await SendPipeCommandAsync(CommandType.RegisterManualTarget, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false); }
+        try
+        {
+            var register = _supportsBatchAssignments ? CommandType.RegisterBatchTarget : CommandType.RegisterManualTarget;
+            response = await SendPipeCommandAsync(register, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false);
+        }
         finally
         {
             _pendingFcsAssignments.Remove(fcs.Id);
@@ -819,7 +830,9 @@ public partial class MainWindow : Window
         ApplyCommandResponse(response.Value);
         if ((ResultCode)response.Value.ResultCode != ResultCode.Success)
         {
-            if (response.Value.AssignedTargetId != target.Id && _assignmentsByTarget.Remove(target.Id, out var rejectedRow))
+            if ((response.Value.AssignedTargetId != target.Id ||
+                 (_supportsBatchAssignments && response.Value.AssignmentState == (uint)AssignmentState.Idle)) &&
+                _assignmentsByTarget.Remove(target.Id, out var rejectedRow))
             {
                 _data.Assignments.Remove(rejectedRow);
                 target.IsAssigned = false;
@@ -833,34 +846,40 @@ public partial class MainWindow : Window
         AddLog($"객체 할당 명령 접수 · {target.DisplayName} → {fcs.DisplayName} · {AssignmentStateText((AssignmentState)response.Value.AssignmentState)}");
     }
 
-    private async void CancelAssignmentClick(object sender, RoutedEventArgs e)
-    {
-        if (!EnsureSharedMemoryLiveForCommand("객체 할당 취소")) return;
-        if ((sender as FrameworkElement)?.DataContext is not AssignmentView assignment || !assignment.StageCommandsEnabled) return;
-        AddLog($"객체 할당 취소 버튼 클릭 · {assignment.TargetName}");
-        var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
-        uint rdrId = target?.RdrId ?? 1;
-        assignment.SetStageCommandPending(true);
-        PipeResponse? response;
-        try { response = await SendPipeCommandAsync(CommandType.CancelAssignment, rdrId, assignment.FcsId, assignment.TargetId, "객체 할당 취소"); }
-        finally { assignment.SetStageCommandPending(false); }
-        if (response is null) return;
-        ApplyCommandResponse(response.Value);
-        if ((ResultCode)response.Value.ResultCode != ResultCode.Success)
-        {
-            var message = CommandResultText((ResultCode)response.Value.ResultCode);
-            AddLog($"객체 할당 취소 거부 · {assignment.TargetName} · {message}");
-            ShowAlert(message, "객체 할당 취소 거부");
-            return;
-        }
-        AddLog($"객체 할당 취소 명령 접수 · {assignment.TargetName}");
-    }
-
     private async void AssignmentStageClick(object sender, RoutedEventArgs e)
     {
-        if (sender is not FrameworkElement { DataContext: AssignmentStage stage, Tag: AssignmentView assignment } ||
-            !stage.CanAdvance || stage.Command is not CommandType command ||
-            !assignment.StageCommandsEnabled || !assignment.Stages.Contains(stage)) return;
+        if (sender is Button { DataContext: AssignmentView assignment, CommandParameter: AssignmentStage stage } &&
+            assignment.CanUsePrimaryAction && stage == assignment.PrimaryAction)
+            await RunAssignmentActionAsync(assignment, stage);
+    }
+
+    private async void AssignmentListActionClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: AssignmentView assignment } || !assignment.CanUseListAction) return;
+
+        var action = new AssignmentStage("할당 해제", "", CanAdvance: true)
+        {
+            Command = assignment.IsBatch ? CommandType.CancelBatchTarget : CommandType.CancelAssignment
+        };
+        await RunAssignmentActionAsync(assignment, action);
+    }
+
+    private async void PauseAssignmentScanClick(object sender, RoutedEventArgs e) => await RunSharedScanActionAsync(1);
+
+    private async void ResumeAssignmentScanClick(object sender, RoutedEventArgs e) => await RunSharedScanActionAsync(3);
+
+    private async Task RunSharedScanActionAsync(int stageIndex)
+    {
+        var assignment = FindAssignmentForScanAction(stageIndex);
+        if (assignment is not null)
+            await RunAssignmentActionAsync(assignment, assignment.Stages[stageIndex]);
+    }
+
+    private async Task RunAssignmentActionAsync(AssignmentView assignment, AssignmentStage stage)
+    {
+        if (!stage.CanAdvance || stage.Command is not CommandType command || !assignment.StageCommandsEnabled ||
+            _data.Assignments.Any(row => row.IsStageCommandPending)) return;
+        if ((command is CommandType.FireBatchTarget or CommandType.StartManualFire) && !assignment.CanFireFromList) return;
         if (!EnsureSharedMemoryLiveForCommand(stage.Label)) return;
 
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
@@ -872,6 +891,7 @@ public partial class MainWindow : Window
         }
 
         assignment.SetStageCommandPending(true);
+        RefreshAssignmentScanControls();
         try
         {
             var response = await SendPipeCommandAsync(command, target?.RdrId ?? 1, assignment.FcsId, assignment.TargetId, stage.Label);
@@ -881,7 +901,11 @@ public partial class MainWindow : Window
             if (result == ResultCode.Success) AddLog($"{stage.Label} · {assignment.TargetName} → {assignment.FcsName}");
             else ShowAlert(CommandResultText(result), stage.Label);
         }
-        finally { assignment.SetStageCommandPending(false); }
+        finally
+        {
+            assignment.SetStageCommandPending(false);
+            RefreshAssignmentScanControls();
+        }
     }
 
     private void ShowAlert(string message, string title) =>
@@ -894,6 +918,28 @@ public partial class MainWindow : Window
         _isRefreshingCommandStatus = true;
         try
         {
+            var batch = await _pipeClient.SendAsync(CommandType.GetBatchStatus, rdrId: 1, fcsId: 1);
+            _supportsBatchAssignments = (ResultCode)batch.ResultCode == ResultCode.Success;
+            if (_supportsBatchAssignments)
+            {
+                SetCommandPipeOnline(batch.IsConnected != 0);
+                if (batch.IsConnected == 0) return;
+                var targetIds = _data.Targets.Select(target => target.Id)
+                    .Concat(_data.Assignments.Where(row => row.IsBatch).Select(row => row.TargetId)).Distinct().ToArray();
+                foreach (var targetId in targetIds)
+                {
+                    var status = await _pipeClient.SendAsync(CommandType.GetBatchStatus, targetId);
+                    if (_pendingFcsAssignments.Count > 0 ||
+                        _data.Assignments.Any(row => row.IsStageCommandPending)) return;
+                    if (status.IsConnected == 0)
+                    {
+                        SetCommandPipeOnline(false);
+                        return;
+                    }
+                    ApplyCommandResponse(status);
+                }
+                return;
+            }
             var response = await _pipeClient.SendAsync(CommandType.GetManualStatus, rdrId: 1, fcsId: 1);
             if ((ResultCode)response.ResultCode == ResultCode.NotSupported)
                 response = await _pipeClient.SendAsync(CommandType.GetStatus, rdrId: 1, fcsId: 1);
@@ -920,7 +966,7 @@ public partial class MainWindow : Window
             SetCommandPipeOnline(false);
             AddLog($"{action} 명령 전송 실패 · Named Pipe 서버 연결 불가");
             if (showConnectionAlert)
-                ShowAlert("명령 파이프 서버에 연결할 수 없습니다.\n모의 통제소 프로그램이 실행 중인지 확인하세요.", "명령 전송 실패");
+                ShowAlert("명령 파이프 서버에 연결할 수 없습니다.\nECS 프로그램이 실행 중인지 확인하세요.", "명령 전송 실패");
             return null;
         }
     }
@@ -944,6 +990,28 @@ public partial class MainWindow : Window
     private void ApplyCommandResponse(PipeResponse response)
     {
         var state = (AssignmentState)response.AssignmentState;
+        bool batch = (CommandType)response.CommandType is >= CommandType.GetBatchStatus and <= CommandType.RetryBatchTarget;
+        if (batch)
+        {
+            var result = (ResultCode)response.ResultCode;
+            if (result != ResultCode.Success) return;
+            foreach (var row in _data.Assignments.Where(row => row.IsBatch))
+                row.BatchFlags = response.FireState;
+            if (state == AssignmentState.Idle)
+            {
+                if (_assignmentsByTarget.TryGetValue(response.AssignedTargetId, out var row) && row.IsBatch &&
+                    !row.IsConnecting)
+                {
+                    _assignmentsByTarget.Remove(row.TargetId);
+                    _assignedTargets.Remove(row.TargetId);
+                    var targetRow = _data.Targets.FirstOrDefault(target => target.Id == row.TargetId);
+                    if (targetRow is not null) targetRow.IsAssigned = false;
+                    _data.Assignments.Remove(row);
+                }
+                RefreshAssignments();
+                return;
+            }
+        }
         if (response.AssignedTargetId == 0 && state == AssignmentState.Idle &&
             !(response.CommandType == (uint)CommandType.GetStatus && _pendingFcsAssignments.Contains(response.FcsId)))
         {
@@ -969,7 +1037,18 @@ public partial class MainWindow : Window
                 _data.Assignments.Add(assignment);
             }
             assignment.FcsId = response.FcsId;
-            if (response.CommandType == (uint)CommandType.GetManualStatus)
+            if (batch)
+            {
+                assignment.IsBatch = true;
+                assignment.BatchFlags = response.FireState;
+            }
+            if (batch)
+            {
+                bool changed = !assignment.HasCommandState(state);
+                assignment.SetCommandStatus(state, 0);
+                if (changed) AddLog($"ECS · {assignment.TargetName} · {AssignmentStateText(state)}");
+            }
+            else if (response.CommandType == (uint)CommandType.GetManualStatus)
                 assignment.SetManualStatus(state, (ResultCode)response.ResultCode, response.FireState);
             else assignment.SetCommandStatus(state, response.FireState);
             _assignedTargets.Add(response.AssignedTargetId);
@@ -980,6 +1059,12 @@ public partial class MainWindow : Window
                 target.SelectedFcsId = response.FcsId;
                 if (state == AssignmentState.ResultConfirmed) target.MarkHit();
             }
+        }
+
+        if (batch)
+        {
+            RefreshAssignments();
+            return;
         }
 
         var stateText = state == AssignmentState.Failed && _assignmentsByTarget.TryGetValue(response.AssignedTargetId, out var failed)
@@ -1006,8 +1091,8 @@ public partial class MainWindow : Window
         AssignmentState.ManualAiming => "FCS 조준 중",
         AssignmentState.Aimed => "조준 완료",
         AssignmentState.ScanPaused => "라이다 조사 중지 완료",
-        AssignmentState.Firing => "모의 발사 진행",
-        AssignmentState.FireConfirmed => "촬영 완료 · 조사 재개 대기",
+        AssignmentState.Firing => "발사 중",
+        AssignmentState.FireConfirmed => "발사 완료",
         AssignmentState.ScanResumed => "조사 재개 완료 · 결과 판정 중",
         AssignmentState.ResultConfirmed => "결과 확인 · HIT",
         AssignmentState.TargetStillPresent => "결과 확인 · 객체 유지",
@@ -1024,7 +1109,7 @@ public partial class MainWindow : Window
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
         ResultCode.ResultUnconfirmed => "동일 ID의 재관측을 3초 안에 확인하지 못했습니다",
-        ResultCode.PauseTimeout => "촬영 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
+        ResultCode.PauseTimeout => "발사 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
         ResultCode.TargetPending => "기존 대상의 최신 관측을 확인할 수 없습니다. 할당을 해제한 뒤 현재 객체 목록에서 대상을 다시 선택하세요.",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
@@ -1086,8 +1171,11 @@ public partial class MainWindow : Window
 
     private void RefreshAssignments()
     {
+        var resumeRow = _data.Assignments.FirstOrDefault(row => row.CanOfferBatchResume && row.HasUnfiredAim)
+            ?? _data.Assignments.FirstOrDefault(row => row.CanOfferBatchResume);
         foreach (var assignment in _data.Assignments)
         {
+            assignment.ShowBatchResume = ReferenceEquals(assignment, resumeRow);
             var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
             var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
             assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null, _isSharedMemoryLive);
@@ -1095,7 +1183,27 @@ public partial class MainWindow : Window
         RefreshAssignmentEmptyState();
     }
 
-    private void RefreshAssignmentEmptyState() => AssignmentEmptyState.Visibility = _data.Assignments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    private void RefreshAssignmentEmptyState()
+    {
+        AssignmentEmptyState.Visibility = _data.Assignments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RefreshAssignmentScanControls();
+    }
+
+    private AssignmentView? FindAssignmentForScanAction(int stageIndex)
+    {
+        if (!_isSharedMemoryLive || _data.Assignments.Any(row => row.IsStageCommandPending)) return null;
+        return _data.Assignments.FirstOrDefault(row => row.StageCommandsEnabled && row.Stages[stageIndex].CanAdvance);
+    }
+
+    private void RefreshAssignmentScanControls()
+    {
+        PauseAssignmentScanButton.IsEnabled = FindAssignmentForScanAction(1) is not null;
+        ResumeAssignmentScanButton.IsEnabled = FindAssignmentForScanAction(3) is not null;
+        var rdr = RdrSelector.SelectedItem as RdrAsset;
+        AssignmentScanStatusText.Text = !_isSharedMemoryLive || rdr?.IsConnected != true ? "연결 대기" :
+            _data.Assignments.Any(row => row.IsScanPaused) ? "조사 일시 중지됨" :
+            rdr.IsOperating ? "조사 중" : "라이다 정지";
+    }
 
     private void AddLog(string text)
     {
@@ -1172,7 +1280,33 @@ public sealed class AssignmentView : INotifyPropertyChanged
     public bool IsActiveCommandState => _connectionPending || _commandState is AssignmentState.Adjusting or AssignmentState.Assigned ||
         ManualCompletedStep > 0 || _fireState != 0;
     public bool IsStageCommandPending { get; private set; }
+    internal bool IsConnecting => _connectionPending;
+    internal bool IsBatch { get; set; }
+    internal bool IsFiring => _commandState == AssignmentState.Firing;
+    internal bool HasUnfiredAim => _commandState is AssignmentState.ManualAiming or AssignmentState.ScanPaused;
+    internal bool HasCommandState(AssignmentState state) => _commandState == state;
+    internal uint BatchFlags { get; set; }
+    internal bool CanOfferBatchResume => IsBatch && (BatchFlags & 2) != 0 &&
+        _commandState is AssignmentState.Confirmed or AssignmentState.ManualAiming or
+            AssignmentState.ScanPaused or AssignmentState.FireConfirmed;
+    internal bool ShowBatchResume { get; set; }
     public bool StageCommandsEnabled => HasAssignment && !_connectionPending && !IsStageCommandPending;
+    internal bool IsScanPaused => IsBatch ? (BatchFlags & 1) != 0 :
+        _commandState is AssignmentState.ScanPaused or AssignmentState.Firing or AssignmentState.FireConfirmed;
+    public AssignmentStage PrimaryAction => _commandState switch
+    {
+        AssignmentState.TargetStillPresent when Stages[4].ActionLabel == "다시 시도" => Stages[4],
+        AssignmentState.Confirmed when IsBatch && !IsScanPaused =>
+            Stages[0] with { ActionLabel = "조사 일시 정지 필요", CanAdvance = false },
+        _ when ManualCompletedStep >= 3 && _commandState != AssignmentState.Failed => Stages[2] with { ActionLabel = "발사" },
+        _ => Stages[0] with { ActionLabel = "조준" }
+    };
+    public bool CanUsePrimaryAction => StageCommandsEnabled && PrimaryAction.CanAdvance &&
+        (PrimaryAction.ActionLabel != "발사" || CanFireFromList);
+    public bool CanFireFromList => StageCommandsEnabled && IsScanPaused && Stages[2].CanAdvance;
+    public string? ListActionLabel => Stages[0].Status.Length == 0 ? null : "할당 해제";
+    public bool CanUseListAction => StageCommandsEnabled && ListActionLabel is not null &&
+        (!IsBatch || _commandState is not (AssignmentState.Firing or AssignmentState.ScanResumed));
     public bool CanFire => StateText == "할당 완료";
     public bool LaunchRequested { get => _launchRequested; set { if (_launchRequested == value) return; _launchRequested = value; OnPropertyChanged(); } }
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -1183,6 +1317,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     {
         IsStageCommandPending = pending;
         OnPropertyChanged(nameof(StageCommandsEnabled));
+        NotifyListActions();
     }
 
     private int _lastManualStep;
@@ -1241,7 +1376,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     private string FailureText => _failureReason switch
     {
         ResultCode.ResultUnconfirmed => "결과 미확정 · 동일 ID 재관측 시간 초과 (3초)",
-        ResultCode.PauseTimeout => "진행 중단 · 촬영 완료 전 조사 중지 제한 초과 (10초)",
+        ResultCode.PauseTimeout => "진행 중단 · 발사 완료 전 조사 중지 제한 초과 (10초)",
         ResultCode.StatusPending => "진행 중단 · FCS 연결 또는 최신 상태 확인 불가",
         ResultCode.TargetPending => "진행 중단 · RDR 관측/보고 상태 확인 불가",
         ResultCode.TargetChanged => "진행 중단 · 대상 위치 또는 관측 세션 변경",
@@ -1320,28 +1455,42 @@ public sealed class AssignmentView : INotifyPropertyChanged
         {
             bool aiming = _commandState == AssignmentState.ManualAiming;
             bool firing = _commandState == AssignmentState.Firing;
+            bool batchPaused = IsBatch && (BatchFlags & 1) != 0;
+            bool canAim = completed == 2 && !aiming &&
+                (target?.CanAssign == true || (batchPaused && target?.IsObservationWaiting == true)) &&
+                (!IsBatch || (batchPaused && (BatchFlags & 4) != 0));
+            bool canFire = completed == 4 && (!IsBatch || (BatchFlags & 8) != 0);
+            bool canPause = !batchPaused && (completed == 3 ||
+                (IsBatch && completed == 2 && !aiming && (BatchFlags & 4) != 0 && target?.CanAssign == true));
+            bool canResume = IsBatch ? ShowBatchResume : completed == 6;
+            var cancelCommand = IsBatch ? CommandType.CancelBatchTarget : CommandType.CancelAssignment;
             var result = _commandState switch
             {
                 AssignmentState.ResultConfirmed => new AssignmentStage(StageLabels[4], "완료 · HIT", true, "할당 해제", true)
-                    { Command = CommandType.CancelAssignment },
+                    { Command = cancelCommand },
+                AssignmentState.TargetStillPresent when batchPaused =>
+                    new AssignmentStage(StageLabels[4], "ALIVE", false, "다시 시도"),
                 AssignmentState.TargetStillPresent when target?.CanAssign != true =>
                     new AssignmentStage(StageLabels[4], "이전 ID 없음 · 현재 목록에서 다시 선택", true, "할당 해제", true)
-                    { Command = CommandType.CancelAssignment },
+                    { Command = cancelCommand },
                 AssignmentState.TargetStillPresent => new AssignmentStage(StageLabels[4], "ALIVE", true, "다시 시도", true)
-                    { Command = CommandType.RetryManualAssignment },
+                    { Command = IsBatch ? CommandType.RetryBatchTarget : CommandType.RetryManualAssignment },
                 AssignmentState.ScanResumed => new AssignmentStage(StageLabels[4], "판정 중", true, "할당 해제"),
                 _ => new AssignmentStage(StageLabels[4], "대기", ActionLabel: "할당 해제")
             };
             UpdateStages(
             [
                 new(StageLabels[0], completed >= 3 ? "완료" : aiming ? "조준 중" : "대기", completed == 2,
-                    "조준", completed == 2 && !aiming && target?.CanAssign == true) { Command = CommandType.StartManualAim },
-                new(StageLabels[1], completed >= 4 ? "완료" : "대기", completed == 3,
-                    "중지", completed == 3) { Command = CommandType.PauseManualScan },
+                    "조준", canAim) { Command = IsBatch ? CommandType.AimBatchTarget : CommandType.StartManualAim },
+                new(StageLabels[1], completed >= 4 || batchPaused ? "완료" : "대기", canPause,
+                    IsBatch && batchPaused ? null : "중지", canPause)
+                    { Command = IsBatch ? CommandType.PauseBatchScan : CommandType.PauseManualScan },
                 new(StageLabels[2], completed >= 6 ? "완료" : firing ? "발사 중" : "대기", completed is 4 or 5,
-                    "발사", completed == 4) { Command = CommandType.StartManualFire },
-                new(StageLabels[3], completed >= 7 ? "완료" : completed == 6 ? "재개 대기" : "대기", completed == 6,
-                    "재개", completed == 6) { Command = CommandType.ResumeManualScan },
+                    "발사", canFire) { Command = IsBatch ? CommandType.FireBatchTarget : CommandType.StartManualFire },
+                new(StageLabels[3], completed >= 7 ? "완료" : completed == 6 ?
+                    "재개 대기" : canResume ? "재개 가능" : "대기", canResume,
+                    IsBatch ? (canResume ? "조사 재개" : null) : "재개", canResume)
+                    { Command = IsBatch ? CommandType.ResumeBatchScan : CommandType.ResumeManualScan },
                 result
             ]);
             return;
@@ -1367,6 +1516,16 @@ public sealed class AssignmentView : INotifyPropertyChanged
         if (Stages.SequenceEqual(stages)) return;
         Stages = stages;
         OnPropertyChanged(nameof(Stages));
+        NotifyListActions();
+    }
+
+    private void NotifyListActions()
+    {
+        OnPropertyChanged(nameof(PrimaryAction));
+        OnPropertyChanged(nameof(CanUsePrimaryAction));
+        OnPropertyChanged(nameof(CanFireFromList));
+        OnPropertyChanged(nameof(ListActionLabel));
+        OnPropertyChanged(nameof(CanUseListAction));
     }
 
     private void RefreshStateText(TargetRecord? target, FcsAsset? fcs)
@@ -1484,6 +1643,7 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public string LidarZText => LidarZ.ToString("0.00");
     public bool IsObservationWaiting => Status is 4 or 5;
     public bool CanAssign => Valid == 1 && Status == 0;
+    public bool CanClickAssign => CanAssign || Status == 4;
     public string StatusText => Status switch { 0 => "ALIVE", 1 => "HIT", 2 => "MISSING", 4 => "관측 일시중지", 5 => "재관측 대기", _ => "UNKNOWN" };
     public string ValidText => Valid == 1 ? "YES" : "NO";
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -1505,6 +1665,7 @@ public sealed class TargetRecord : INotifyPropertyChanged
         if (name is nameof(Status) or nameof(Valid))
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanAssign)));
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CanClickAssign)));
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsObservationWaiting)));
         }
         var computed = name switch

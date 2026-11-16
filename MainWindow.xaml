@@ -37,7 +37,7 @@
         <Grid Grid.Row="6" Margin="4,8,4,4"><Grid.RowDefinitions><RowDefinition Height="22"/><RowDefinition Height="30"/></Grid.RowDefinitions><DockPanel><TextBlock Text="라이다 고각 조정" Foreground="{StaticResource Green}" VerticalAlignment="Center"/><StackPanel Orientation="Horizontal" DockPanel.Dock="Right"><TextBox x:Name="RdrElevationInput" Width="52" Height="21" MaxLength="4" Text="0.0" VerticalContentAlignment="Center" HorizontalContentAlignment="Center" PreviewTextInput="RdrElevationInputPreviewTextInput" TextChanged="RdrElevationInputTextChanged" IsEnabled="False"/><TextBlock Text="°" VerticalAlignment="Center" Margin="2,0,5,0"/><Button Content="적용" Click="RdrElevationInputApplyClick" Width="42" Height="21" Padding="2,0" FontSize="10" IsEnabled="False" x:Name="RdrElevationApplyButton"/></StackPanel><TextBlock x:Name="RdrElevationSliderValue" Text="0.0°" Foreground="{StaticResource Green}" FontWeight="Bold" VerticalAlignment="Center" Margin="8,0,0,0"/></DockPanel><DockPanel Grid.Row="1"><TextBlock Text="0.0°" Foreground="{StaticResource Muted}" VerticalAlignment="Center" FontSize="10"/><Slider x:Name="RdrElevationSlider" Minimum="0" Maximum="90" TickFrequency="0.1" IsSnapToTickEnabled="True" IsMoveToPointEnabled="True" ValueChanged="RdrElevationSliderValueChanged" IsEnabled="False" Margin="8,0" VerticalAlignment="Center" MinWidth="210"/><TextBlock Text="90.0°" Foreground="{StaticResource Muted}" VerticalAlignment="Center" FontSize="10"/></DockPanel></Grid>
       </Grid></Border>
       <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
-      <Grid Grid.Column="2" Margin="0,0,0,0"><Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="*"/><RowDefinition Height="150"/><RowDefinition Height="135"/></Grid.RowDefinitions>
+      <Grid Grid.Column="2" Margin="0,0,0,0"><Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="*"/><RowDefinition Height="*" MinHeight="150"/><RowDefinition Height="135"/></Grid.RowDefinitions>
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="객체 목록" Foreground="{StaticResource Green}" FontWeight="Bold" Margin="5,0,8,0"/><TextBlock x:Name="TargetCountText" Text="0 / 10" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/></StackPanel></Grid>
         <DataGrid x:Name="TargetGrid" Grid.Row="1" ItemsSource="{Binding Targets}" SelectionChanged="TargetGridSelectionChanged" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F" BorderBrush="{StaticResource Line}" Foreground="#C3D6CE" RowBackground="#07100F" AlternatingRowBackground="#091411" SelectionMode="Single" IsReadOnly="False">
           <DataGrid.Columns>
@@ -47,7 +47,7 @@
             <DataGridTemplateColumn Header="할당" Width="1.1*" MinWidth="90">
               <DataGridTemplateColumn.CellTemplate>
                 <DataTemplate>
-                  <Button Click="TargetAssignClick" Padding="5,3" IsEnabled="{Binding CanAssign}">
+                  <Button Click="TargetAssignClick" Padding="5,3" IsEnabled="{Binding CanClickAssign}">
                     <Button.Style>
                       <Style TargetType="Button">
                         <Setter Property="Content" Value="객체 할당"/>
@@ -128,91 +128,88 @@
                     <Setter Property="Foreground" Value="#748F80"/>
                     <Setter Property="BorderBrush" Value="#30463A"/>
                   </Trigger>
-                  <DataTrigger Binding="{Binding IsComplete}" Value="True">
-                    <Setter Property="Background" Value="#34280E"/>
-                    <Setter Property="Foreground" Value="#F4CC67"/>
-                    <Setter Property="BorderBrush" Value="#826629"/>
-                  </DataTrigger>
                 </Style.Triggers>
               </Style>
-              <DataTemplate x:Key="AssignmentProgressTemplate">
-                <Grid Margin="8,2,8,6">
-                  <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                  </Grid.RowDefinitions>
-                  <DockPanel Margin="0,0,0,5">
-                    <StackPanel x:Name="AssignmentActions" DockPanel.Dock="Right" Orientation="Horizontal">
-                      <Button Content="취소" Click="CancelAssignmentClick" IsEnabled="{Binding StageCommandsEnabled}"
-                              Style="{StaticResource AssignmentButtonStyle}" Margin="5,0,0,0"/>
-                    </StackPanel>
-                    <TextBlock DockPanel.Dock="Left" Text="{Binding ProgressTitle}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                    <TextBlock x:Name="AssignmentCurrentState" Text="{Binding StateText, StringFormat='현재: {0}'}" Foreground="#FFB000"
-                               HorizontalAlignment="Right" VerticalAlignment="Center" TextWrapping="Wrap" ToolTip="{Binding StateText}"/>
-                  </DockPanel>
-                    <ItemsControl Grid.Row="1" ItemsSource="{Binding Stages}" IsEnabled="{Binding StageCommandsEnabled}">
-                      <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate><UniformGrid Rows="1" Columns="5"/></ItemsPanelTemplate>
-                      </ItemsControl.ItemsPanel>
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                          <Border x:Name="StageCard" Height="84" Background="Black" BorderBrush="{StaticResource Line}"
-                                  BorderThickness="1" Margin="3,0" Padding="3">
-                            <Grid>
-                              <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="30"/>
-                              </Grid.RowDefinitions>
-                              <TextBlock Text="{Binding Label}" FontSize="11" TextWrapping="Wrap" ToolTip="{Binding Label}"/>
-                              <TextBlock x:Name="StageStatus" Grid.Row="1" Text="{Binding Status}" Foreground="#92AFA5"
-                                         FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}"/>
-                              <Button x:Name="StageAction" Grid.Row="2" Content="{Binding ActionLabel}" ToolTip="{Binding ActionLabel}" Click="AssignmentStageClick"
-                                      Tag="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                      Style="{StaticResource AssignmentButtonStyle}" IsEnabled="{Binding CanAdvance}" Padding="1,0">
-                                <Button.ContentTemplate>
-                                  <DataTemplate><TextBlock Text="{Binding}" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                                           TextWrapping="Wrap" TextAlignment="Center"/></DataTemplate>
-                                </Button.ContentTemplate>
-                              </Button>
-                            </Grid>
-                          </Border>
-                          <DataTemplate.Triggers>
-                            <DataTrigger Binding="{Binding ActionLabel}" Value="{x:Null}">
-                              <Setter TargetName="StageAction" Property="Visibility" Value="Collapsed"/>
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding Status}" Value="완료">
-                              <Setter TargetName="StageCard" Property="Background" Value="#0A261D"/>
-                              <Setter TargetName="StageStatus" Property="Foreground" Value="{StaticResource Green}"/>
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                              <Setter TargetName="StageCard" Property="Background" Value="#32250D"/>
-                              <Setter TargetName="StageCard" Property="BorderBrush" Value="#FFB000"/>
-                              <Setter TargetName="StageStatus" Property="Foreground" Value="#FFB000"/>
-                            </DataTrigger>
-                          </DataTemplate.Triggers>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </Grid>
-                <DataTemplate.Triggers>
-                  <DataTrigger Binding="{Binding HasAssignment}" Value="False">
-                    <Setter TargetName="AssignmentActions" Property="Visibility" Value="Collapsed"/>
-                    <Setter TargetName="AssignmentCurrentState" Property="Visibility" Value="Collapsed"/>
-                  </DataTrigger>
-                </DataTemplate.Triggers>
-              </DataTemplate>
             </Grid.Resources>
             <Grid.RowDefinitions>
-              <RowDefinition Height="28"/>
+              <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock Text="객체 할당 정보" Foreground="{StaticResource Green}" Margin="10,5"/>
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-              <ItemsControl ItemsSource="{Binding Assignments}" ItemTemplate="{StaticResource AssignmentProgressTemplate}"/>
-            </ScrollViewer>
-            <ContentControl x:Name="AssignmentEmptyState" Grid.Row="1" ContentTemplate="{StaticResource AssignmentProgressTemplate}"
-                            HorizontalContentAlignment="Stretch" VerticalAlignment="Top"/>
+            <DockPanel Margin="8,5">
+              <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button x:Name="PauseAssignmentScanButton" Content="조사 일시 중지" Click="PauseAssignmentScanClick"
+                        Style="{StaticResource AssignmentButtonStyle}" IsEnabled="False"/>
+                <Button x:Name="ResumeAssignmentScanButton" Content="조사 재개" Click="ResumeAssignmentScanClick"
+                        Style="{StaticResource AssignmentButtonStyle}" IsEnabled="False" Margin="5,0,0,0"/>
+              </StackPanel>
+              <TextBlock DockPanel.Dock="Left" Text="객체 할당 정보" Foreground="{StaticResource Green}"
+                         FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
+              <TextBlock x:Name="AssignmentScanStatusText" Foreground="#92AFA5" VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+            <DataGrid x:Name="AssignmentGrid" Grid.Row="1" ItemsSource="{Binding Assignments}"
+                      AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True"
+                      HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F"
+                      RowBackground="#07100F" AlternatingRowBackground="#091411" FontSize="11">
+              <DataGrid.Columns>
+                <DataGridTextColumn Header="객체 ID" Binding="{Binding TargetName}" Width="*" MinWidth="72"/>
+                <DataGridTextColumn Header="FCS" Binding="{Binding FcsName}" Width="*" MinWidth="70"/>
+                <DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" Width="*" MinWidth="58"/>
+                <DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" Width="*" MinWidth="52"/>
+                <DataGridTextColumn Header="진행 상태" Binding="{Binding StateText}" Width="2*" MinWidth="115"/>
+                <DataGridTextColumn Header="결과" Binding="{Binding Stages[4].Status}" Width="*" MinWidth="66"/>
+                <DataGridTemplateColumn Header="조작" Width="128">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <Button Content="{Binding PrimaryAction.ActionLabel}" Click="AssignmentStageClick"
+                              CommandParameter="{Binding PrimaryAction}" Margin="2" IsEnabled="{Binding CanUsePrimaryAction}">
+                        <Button.Style>
+                          <Style TargetType="Button" BasedOn="{StaticResource AssignmentButtonStyle}">
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="조사 일시 정지 필요">
+                                <Setter Property="Background" Value="#493810"/>
+                                <Setter Property="Foreground" Value="#FFE299"/>
+                                <Setter Property="BorderBrush" Value="#B98B2D"/>
+                              </DataTrigger>
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="발사">
+                                <Setter Property="Background" Value="#571B25"/>
+                                <Setter Property="Foreground" Value="#FFBCC2"/>
+                                <Setter Property="BorderBrush" Value="#AD4957"/>
+                              </DataTrigger>
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="조준">
+                                <Setter Property="Background" Value="#571B25"/>
+                                <Setter Property="Foreground" Value="#FFBCC2"/>
+                                <Setter Property="BorderBrush" Value="#AD4957"/>
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </Button.Style>
+                      </Button>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="관리" Width="82">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <Button Content="{Binding ListActionLabel}" Click="AssignmentListActionClick"
+                              Margin="2" IsEnabled="{Binding CanUseListAction}">
+                        <Button.Style>
+                          <Style TargetType="Button" BasedOn="{StaticResource AssignmentButtonStyle}">
+                            <Style.Triggers>
+                              <DataTrigger Binding="{Binding ListActionLabel}" Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                              </DataTrigger>
+                            </Style.Triggers>
+                          </Style>
+                        </Button.Style>
+                      </Button>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+              </DataGrid.Columns>
+            </DataGrid>
+            <TextBlock x:Name="AssignmentEmptyState" Grid.Row="1" Text="미할당" Foreground="{StaticResource Muted}"
+                       HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
           </Grid>
         </Border>
         <Border Grid.Row="3" Margin="0,6,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Panel}"><Grid><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><StackPanel Orientation="Horizontal" Margin="10,3" VerticalAlignment="Center"><TextBlock Text="이벤트 로그" Foreground="{StaticResource Green}" VerticalAlignment="Center"/><Button Content="로그파일 열기" Click="OpenEventLogClick" Margin="8,0,0,0" Width="82" Height="19" Padding="3,0" FontSize="9"/></StackPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#8BB0A1" FontSize="11"/></Grid></Border>
