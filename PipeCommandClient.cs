@@ -38,6 +38,7 @@ internal enum CommandType : uint
     ConfirmManualResult = 1008,
     RetryManualAssignment = 1009,
     GetManualStatus = 1010, // ResultCode=실패 사유, FireState=마지막 진행 단계(0~8)
+    StopManualCapture = 1011,
     GetBatchStatus = 1200,
     RegisterBatchTarget = 1201,
     CancelBatchTarget = 1202,
@@ -45,7 +46,8 @@ internal enum CommandType : uint
     PauseBatchScan = 1204,
     FireBatchTarget = 1205,
     ResumeBatchScan = 1206,
-    RetryBatchTarget = 1207
+    RetryBatchTarget = 1207,
+    StopBatchCapture = 1208
 }
 
 /// <summary>Named Pipe 명령 처리 결과</summary>
@@ -97,7 +99,8 @@ internal enum AssignmentState : uint
     ScanResumed = 107,
     ResultConfirmed = 108,
     ManualAiming = 110,
-    TargetStillPresent = 111
+    TargetStillPresent = 111,
+    StoppingCapture = 112
 }
 
 /// <summary>WPF에서 ECS로 보내는 28바이트 요청 구조체</summary>

@@ -171,6 +171,11 @@
                                 <Setter Property="Foreground" Value="#FFE299"/>
                                 <Setter Property="BorderBrush" Value="#B98B2D"/>
                               </DataTrigger>
+                              <DataTrigger Binding="{Binding PrimaryAction.Label}" Value="촬영 중지">
+                                <Setter Property="Background" Value="#6B4A0D"/>
+                                <Setter Property="Foreground" Value="#FFE299"/>
+                                <Setter Property="BorderBrush" Value="#D9AA46"/>
+                              </DataTrigger>
                               <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="실행">
                                 <Setter Property="Background" Value="#571B25"/>
                                 <Setter Property="Foreground" Value="#FFBCC2"/>
