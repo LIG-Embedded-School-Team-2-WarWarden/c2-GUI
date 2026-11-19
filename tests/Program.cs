@@ -97,6 +97,13 @@ static class Checks
             Manual(restored,"Failed","LidarStopWarningUnconfirmed",4);Check(restored.StateText.Contains("온도 경고"),"warning reason lost");
             Manual(restored,"Confirmed","Success",2);restored.Refresh(null,null);
             Check(!restored.Stages.Any(s=>s.Status=="완료"),"retry kept old completion");
+            Manual(restored,"Firing","Success",5);restored.Refresh(null,null);
+            Check(restored.PrimaryAction.ActionLabel=="중지"&&restored.PrimaryAction.CanAdvance,
+                "a capturing row must offer the stop action");
+            Manual(restored,"StoppingCapture","Success",5);restored.Refresh(null,null);
+            Check(restored.PrimaryAction.ActionLabel=="중지 확인 중"&&!restored.PrimaryAction.CanAdvance&&
+                !restored.Stages[3].CanAdvance&&restored.TargetId==7,
+                "stopping must keep the assignment and wait for confirmed return");
             Manual(restored,"FireConfirmed","Success",6);restored.Refresh(null,null);
             Check(restored.Stages[3].CanAdvance&&restored.Stages[3].Status=="재개 대기","manual resume unavailable");
             Manual(restored,"TargetStillPresent","Success",8);restored.Refresh(null,null);
