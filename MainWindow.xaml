@@ -162,8 +162,9 @@
                 <DataGridTemplateColumn Header="좌표" Width="42">
                   <DataGridTemplateColumn.CellTemplate>
                     <DataTemplate>
-                      <Button Content="⚙" ToolTip="객체 좌표 수정" Click="EditAssignmentCoordinatesClick"
-                              Tag="{Binding TargetId}" Margin="2" Padding="2,0" MinWidth="28"/>
+                      <Button Content="⚙" ToolTip="조준 전 객체 좌표 수정" Click="EditAssignmentCoordinatesClick"
+                              Tag="{Binding TargetId}" Margin="2" Padding="2,0" MinWidth="28"
+                              IsEnabled="{Binding CanEditCoordinates}"/>
                     </DataTemplate>
                   </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
