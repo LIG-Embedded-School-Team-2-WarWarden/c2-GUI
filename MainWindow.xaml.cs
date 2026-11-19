@@ -21,6 +21,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _rdrElevationSendTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly PipeCommandClient _pipeClient = new();
     private readonly Dictionary<uint, uint> _targetFcsSelections = new();
+    private readonly Dictionary<uint, (float X, float Y, float Z)> _targetAimCoordinates = new();
     private readonly Dictionary<uint, int> _targetListOrder = new();
     private readonly HashSet<uint> _assignedTargets = new();
     private readonly Dictionary<uint, AssignmentView> _assignmentsByTarget = new();
@@ -860,6 +861,35 @@ public partial class MainWindow : Window
             await RunAssignmentActionAsync(assignment, stage);
     }
 
+    private void EditAssignmentCoordinatesClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: AssignmentView assignment }) return;
+        var target = _data.Targets.FirstOrDefault(item => item.Id == assignment.TargetId);
+        if (target is null) return;
+        var fcs = _data.FcsAssets.FirstOrDefault(item => item.Id == assignment.FcsId);
+        var current = _targetAimCoordinates.TryGetValue(target.Id, out var saved)
+            ? saved : ToFcsAimCoordinates(target, fcs);
+
+        var editor = new TargetCoordinateEditorWindow(target.Id, current.X, current.Y, current.Z)
+        {
+            Owner = this
+        };
+        if (editor.ShowDialog() != true) return;
+
+        _targetAimCoordinates[target.Id] = (editor.PositionX, editor.PositionY, editor.PositionZ);
+        RefreshAssignments();
+        AddLog($"조준 좌표 임시 변경 · {target.DisplayName} · X/Y/Z {editor.PositionX:0.00}/{editor.PositionY:0.00}/{editor.PositionZ:0.00} m (GUI 전용)");
+    }
+
+    private static (float X, float Y, float Z) ToFcsAimCoordinates(TargetRecord target, FcsAsset? fcs)
+    {
+        if (fcs is null) return (target.LidarX, target.DistanceM, target.LidarZ);
+        var dx = target.LidarX - fcs.PositionX;
+        var dy = target.LidarY - fcs.PositionY;
+        var dz = target.LidarZ - fcs.PositionZ;
+        return (dx, MathF.Sqrt(dx * dx + dy * dy), dz);
+    }
+
     private async void AssignmentListActionClick(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { DataContext: AssignmentView assignment } || !assignment.CanUseListAction) return;
@@ -1197,7 +1227,10 @@ public partial class MainWindow : Window
             assignment.ShowBatchResume = ReferenceEquals(assignment, resumeRow);
             var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
             var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
-            assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null, _isSharedMemoryLive);
+            (float X, float Y, float Z)? aimCoordinates = target is null ? null : _targetAimCoordinates.TryGetValue(target.Id, out var saved)
+                ? saved : ToFcsAimCoordinates(target, fcs);
+            assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null,
+                _isSharedMemoryLive, aimCoordinates);
         }
         RefreshAssignmentEmptyState();
     }
@@ -1328,6 +1361,8 @@ public sealed class AssignmentView : INotifyPropertyChanged
             AssignmentState.ScanPaused or AssignmentState.FireConfirmed;
     internal bool ShowBatchResume { get; set; }
     public bool StageCommandsEnabled => HasAssignment && !_connectionPending && !IsStageCommandPending;
+    public bool CanEditCoordinates => StageCommandsEnabled && ManualCompletedStep < 3 &&
+        _commandState is not (AssignmentState.ManualAiming or AssignmentState.Adjusting or AssignmentState.Aimed or AssignmentState.Assigned);
     internal bool IsScanPaused => IsBatch ? (BatchFlags & 1) != 0 :
         _commandState is AssignmentState.ScanPaused or AssignmentState.Firing or AssignmentState.StoppingCapture or AssignmentState.FireConfirmed;
     public AssignmentStage PrimaryAction => _commandState switch
@@ -1379,6 +1414,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _commandState = null;
         StateText = "연결 시도 중";
         OnPropertyChanged(nameof(StageCommandsEnabled));
+        OnPropertyChanged(nameof(CanEditCoordinates));
     }
 
     public void SetConnectionFailed()
@@ -1387,6 +1423,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _connectionFailed = true;
         _commandState = null;
         StateText = "연결 실패 · 재시도 가능";
+        OnPropertyChanged(nameof(CanEditCoordinates));
     }
 
     internal void SetCommandStatus(AssignmentState state, uint fireState)
@@ -1401,6 +1438,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
             _failureReason = ResultCode.Success;
         }
         OnPropertyChanged(nameof(StageCommandsEnabled));
+        OnPropertyChanged(nameof(CanEditCoordinates));
         RefreshStateText(null, null);
     }
 
@@ -1445,11 +1483,13 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _commandState = null;
         _fireState = 0;
         StateText = "명령 파이프 대기";
+        OnPropertyChanged(nameof(CanEditCoordinates));
     }
 
     public void Refresh(TargetRecord? target, FcsAsset? fcs) => Refresh(target, fcs, true);
 
-    internal void Refresh(TargetRecord? target, FcsAsset? fcs, bool isSharedMemoryLive)
+    internal void Refresh(TargetRecord? target, FcsAsset? fcs, bool isSharedMemoryLive,
+        (float X, float Y, float Z)? aimCoordinates = null)
     {
         if (target is null)
         {
@@ -1460,12 +1500,15 @@ public sealed class AssignmentView : INotifyPropertyChanged
             else UpdateStages(StageLabels.Select(label => new AssignmentStage(label, "")).ToArray());
             return;
         }
-        AzimuthText = $"{target.AzimuthDeg:0.0}°";
-        ElevationText = $"{target.ElevationDeg:0.0}°";
+        var coords = aimCoordinates ?? (target.LidarX, target.DistanceM, target.LidarZ);
+        var azimuth = (Math.Atan2(coords.X, coords.Y) * 180.0 / Math.PI + 135.0 + 360.0) % 360.0;
+        var elevation = Math.Atan2(coords.Z, Math.Sqrt(coords.X * coords.X + coords.Y * coords.Y)) * 180.0 / Math.PI;
+        AzimuthText = $"{azimuth:0.0}°";
+        ElevationText = $"{elevation:0.0}°";
         DistanceText = $"{target.DistanceM:0.00}";
-        LidarXText = $"{target.LidarX:0.00}";
-        LidarYText = $"{target.LidarY:0.00}";
-        LidarZText = $"{target.LidarZ:0.00}";
+        LidarXText = $"{coords.X:0.00}";
+        LidarYText = $"{coords.Y:0.00}";
+        LidarZText = $"{coords.Z:0.00}";
         RdrIdText = target.RdrId.ToString();
         TargetStatusText = target.StatusText;
         RefreshStateText(target, fcs);
@@ -1580,6 +1623,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         OnPropertyChanged(nameof(CanFireFromList));
         OnPropertyChanged(nameof(ListActionLabel));
         OnPropertyChanged(nameof(CanUseListAction));
+        OnPropertyChanged(nameof(CanEditCoordinates));
     }
 
     private void RefreshStateText(TargetRecord? target, FcsAsset? fcs)
@@ -1732,4 +1776,173 @@ public sealed class TargetRecord : INotifyPropertyChanged
         };
         if (computed is not null) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(computed));
     }
+}
+
+internal sealed class TargetCoordinateEditorWindow : Window
+{
+    private readonly TextBox _xInput;
+    private readonly TextBox _yInput;
+    private readonly TextBox _zInput;
+    private readonly TextBlock _anglePreview;
+
+    internal float PositionX { get; private set; }
+    internal float PositionY { get; private set; }
+    internal float PositionZ { get; private set; }
+
+    internal TargetCoordinateEditorWindow(uint targetId, float x, float y, float z)
+    {
+        Title = $"TGT-{targetId} 좌표 수정";
+        Width = 560;
+        Height = 360;
+        ResizeMode = ResizeMode.NoResize;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Background = new SolidColorBrush(Color.FromRgb(9, 20, 17));
+        Foreground = new SolidColorBrush(Color.FromRgb(226, 239, 232));
+
+        _xInput = CreateInput(x);
+        _yInput = CreateInput(y);
+        _zInput = CreateInput(z);
+
+        var root = new Grid { Margin = new Thickness(16) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+        var heading = new TextBlock
+        {
+            Text = "조준 기준 좌표 (m)",
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+        Grid.SetColumnSpan(heading, 2);
+        root.Children.Add(heading);
+
+        var fields = new StackPanel { Margin = new Thickness(0, 24, 14, 0) };
+        AddCoordinateRow(fields, "X · 좌우", _xInput);
+        AddCoordinateRow(fields, "Y · 거리", _yInput);
+        AddCoordinateRow(fields, "Z · 높이", _zInput);
+        _anglePreview = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(0, 230, 138)), Margin = new Thickness(0, 14, 0, 0), TextWrapping = TextWrapping.Wrap };
+        fields.Children.Add(_anglePreview);
+        Grid.SetRow(fields, 1);
+        root.Children.Add(fields);
+
+        var diagram = CreateAxisDiagram();
+        Grid.SetRow(diagram, 1);
+        Grid.SetColumn(diagram, 1);
+        root.Children.Add(diagram);
+
+        _xInput.TextChanged += (_, _) => UpdateAnglePreview();
+        _yInput.TextChanged += (_, _) => UpdateAnglePreview();
+        _zInput.TextChanged += (_, _) => UpdateAnglePreview();
+        UpdateAnglePreview();
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+        var save = new Button { Content = "적용", Width = 72, Margin = new Thickness(0, 0, 6, 0), IsDefault = true };
+        save.Click += (_, _) => SaveCoordinates();
+        var cancel = new Button { Content = "취소", Width = 72, IsCancel = true };
+        buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
+        Grid.SetRow(buttons, 2);
+        Grid.SetColumnSpan(buttons, 2);
+        root.Children.Add(buttons);
+        Content = root;
+    }
+
+    private static TextBox CreateInput(float value) => new()
+    {
+        Text = value.ToString("0.00", System.Globalization.CultureInfo.CurrentCulture),
+        MinWidth = 190,
+        Margin = new Thickness(8, 3, 0, 3),
+        Padding = new Thickness(6, 3, 6, 3),
+        VerticalContentAlignment = VerticalAlignment.Center
+    };
+
+    private static void AddCoordinateRow(Panel root, string label, TextBox input)
+    {
+        var line = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 4, 0, 4) };
+        line.Children.Add(new TextBlock { Text = label, Width = 76, VerticalAlignment = VerticalAlignment.Center });
+        line.Children.Add(input);
+        root.Children.Add(line);
+    }
+
+    private static Border CreateAxisDiagram()
+    {
+        var canvas = new Canvas { Width = 178, Height = 180, Background = new SolidColorBrush(Color.FromRgb(7, 16, 15)) };
+        var origin = new Point(83, 124);
+        AddAxis(canvas, origin, new Point(150, 124), "X · 좌우", 112, 129);
+        AddAxis(canvas, origin, new Point(83, 43), "Z · 높이", 89, 30);
+        AddAxis(canvas, origin, new Point(32, 73), "Y · 거리", 4, 48);
+        AddCanvasText(canvas, "표적", 93, 51, new SolidColorBrush(Color.FromRgb(255, 176, 0)));
+        var targetDot = new Ellipse { Width = 8, Height = 8, Fill = new SolidColorBrush(Color.FromRgb(255, 176, 0)) };
+        Canvas.SetLeft(targetDot, 91);
+        Canvas.SetTop(targetDot, 65);
+        canvas.Children.Add(targetDot);
+        return new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromRgb(28, 55, 47)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(8),
+            Child = new StackPanel
+            {
+                Children =
+                {
+                    new TextBlock { Text = "좌표 방향", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) },
+                    canvas,
+                    new TextBlock { Text = "Y는 전방 거리, Z는 높이", FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(146, 175, 165)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) }
+                }
+            }
+        };
+    }
+
+    private static void AddAxis(Canvas canvas, Point start, Point end, string label, double labelX, double labelY)
+    {
+        canvas.Children.Add(new Line { X1 = start.X, Y1 = start.Y, X2 = end.X, Y2 = end.Y, Stroke = new SolidColorBrush(Color.FromRgb(0, 230, 138)), StrokeThickness = 2 });
+        var angle = Math.Atan2(end.Y - start.Y, end.X - start.X);
+        foreach (var offset in new[] { 2.55, -2.55 })
+        {
+            var tip = new Point(end.X - 8 * Math.Cos(angle + offset), end.Y - 8 * Math.Sin(angle + offset));
+            canvas.Children.Add(new Line { X1 = end.X, Y1 = end.Y, X2 = tip.X, Y2 = tip.Y, Stroke = new SolidColorBrush(Color.FromRgb(0, 230, 138)), StrokeThickness = 2 });
+        }
+        AddCanvasText(canvas, label, labelX, labelY, new SolidColorBrush(Color.FromRgb(206, 228, 216)));
+    }
+
+    private static void AddCanvasText(Canvas canvas, string text, double x, double y, Brush foreground)
+    {
+        var label = new TextBlock { Text = text, Foreground = foreground, FontSize = 10 };
+        Canvas.SetLeft(label, x);
+        Canvas.SetTop(label, y);
+        canvas.Children.Add(label);
+    }
+
+    private void UpdateAnglePreview()
+    {
+        if (!TryRead(_xInput, out var x) || !TryRead(_yInput, out var y) || !TryRead(_zInput, out var z))
+        {
+            _anglePreview.Text = "방위각·고각 미리보기: 입력값 확인";
+            return;
+        }
+        var azimuth = (Math.Atan2(x, y) * 180.0 / Math.PI + 135.0 + 360.0) % 360.0;
+        var elevation = Math.Atan2(z, Math.Sqrt(x * x + y * y)) * 180.0 / Math.PI;
+        _anglePreview.Text = $"계산 각도  방위각 {azimuth:0.0}°\n고각 {elevation:0.0}°";
+    }
+
+    private void SaveCoordinates()
+    {
+        if (!TryRead(_xInput, out var x) || !TryRead(_yInput, out var y) || !TryRead(_zInput, out var z))
+        {
+            MessageBox.Show(this, "X, Y, Z에 유효한 숫자를 입력하세요.", "좌표 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        PositionX = x;
+        PositionY = y;
+        PositionZ = z;
+        DialogResult = true;
+    }
+
+    private static bool TryRead(TextBox input, out float value) =>
+        (float.TryParse(input.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out value) ||
+         float.TryParse(input.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value)) &&
+        float.IsFinite(value);
 }

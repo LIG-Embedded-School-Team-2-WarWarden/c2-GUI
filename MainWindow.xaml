@@ -156,6 +156,18 @@
                 <DataGridTextColumn Header="FCS" Binding="{Binding FcsName}" Width="*" MinWidth="70"/>
                 <DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" Width="*" MinWidth="58"/>
                 <DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" Width="*" MinWidth="52"/>
+                <DataGridTextColumn Header="X" Binding="{Binding LidarXText}" Width="0.75*" MinWidth="48"/>
+                <DataGridTextColumn Header="Y" Binding="{Binding LidarYText}" Width="0.75*" MinWidth="48"/>
+                <DataGridTextColumn Header="Z" Binding="{Binding LidarZText}" Width="0.75*" MinWidth="48"/>
+                <DataGridTemplateColumn Header="좌표" Width="42">
+                  <DataGridTemplateColumn.CellTemplate>
+                    <DataTemplate>
+                      <Button Content="⚙" ToolTip="조준 전 객체 좌표 수정" Click="EditAssignmentCoordinatesClick"
+                              Tag="{Binding TargetId}" Margin="2" Padding="2,0" MinWidth="28"
+                              IsEnabled="{Binding CanEditCoordinates}"/>
+                    </DataTemplate>
+                  </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
                 <DataGridTextColumn Header="진행 상태" Binding="{Binding StateText}" Width="2*" MinWidth="115"/>
                 <DataGridTextColumn Header="결과" Binding="{Binding Stages[4].Status}" Width="*" MinWidth="66"/>
                 <DataGridTemplateColumn Header="조작" Width="128">
