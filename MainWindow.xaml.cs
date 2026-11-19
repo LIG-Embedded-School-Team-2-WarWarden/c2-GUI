@@ -860,6 +860,24 @@ public partial class MainWindow : Window
             await RunAssignmentActionAsync(assignment, stage);
     }
 
+    private void EditAssignmentCoordinatesClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: AssignmentView assignment }) return;
+        var target = _data.Targets.FirstOrDefault(item => item.Id == assignment.TargetId);
+        if (target is null) return;
+
+        var editor = new TargetCoordinateEditorWindow(target.Id, target.LidarX, target.LidarY, target.LidarZ)
+        {
+            Owner = this
+        };
+        if (editor.ShowDialog() != true) return;
+
+        target.SetLocalPositionOverride(editor.PositionX, editor.PositionY, editor.PositionZ);
+        RefreshAssignments();
+        DrawRadar();
+        AddLog($"객체 좌표 임시 변경 · {target.DisplayName} · X/Y/Z {target.LidarX:0.00}/{target.LidarY:0.00}/{target.LidarZ:0.00} m (GUI 전용)");
+    }
+
     private async void AssignmentListActionClick(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { DataContext: AssignmentView assignment } || !assignment.CanUseListAction) return;
@@ -1456,8 +1474,22 @@ public sealed class AssignmentView : INotifyPropertyChanged
             else UpdateStages(StageLabels.Select(label => new AssignmentStage(label, "")).ToArray());
             return;
         }
-        AzimuthText = $"{target.AzimuthDeg:0.0}°";
-        ElevationText = $"{target.ElevationDeg:0.0}°";
+        if (fcs is not null)
+        {
+            var dx = target.LidarX - fcs.PositionX;
+            var dy = target.LidarY - fcs.PositionY;
+            var dz = target.LidarZ - fcs.PositionZ;
+            var azimuth = Math.Atan2(dx, dy) * 180.0 / Math.PI + 135.0;
+            azimuth = (azimuth % 360.0 + 360.0) % 360.0;
+            var elevation = Math.Atan2(dz, Math.Sqrt(dx * dx + dy * dy)) * 180.0 / Math.PI;
+            AzimuthText = $"{azimuth:0.0}°";
+            ElevationText = $"{elevation:0.0}°";
+        }
+        else
+        {
+            AzimuthText = $"{target.AzimuthDeg:0.0}°";
+            ElevationText = $"{target.ElevationDeg:0.0}°";
+        }
         DistanceText = $"{target.DistanceM:0.00}";
         LidarXText = $"{target.LidarX:0.00}";
         LidarYText = $"{target.LidarY:0.00}";
@@ -1665,6 +1697,7 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public uint Id { get; }
     private float _azimuthDeg, _elevationDeg;
     private float _distanceM, _lidarX, _lidarY, _lidarZ;
+    private bool _hasLocalPositionOverride;
     private uint _rdrId;
     private byte _status, _valid;
     private bool _isAssigned, _isAssignmentPending;
@@ -1700,9 +1733,14 @@ public sealed class TargetRecord : INotifyPropertyChanged
         UpdateFrom(azimuthDeg, elevationDeg, distanceM, lidarX, lidarY, lidarZ, rdrId, status, valid ? (byte)1 : (byte)0);
     }
     public void UpdateFrom(TargetRecord other) => UpdateFrom(other.AzimuthDeg, other.ElevationDeg, other.DistanceM, other.LidarX, other.LidarY, other.LidarZ, other.RdrId, other.Status, other.Valid);
+    internal void SetLocalPositionOverride(float x, float y, float z)
+    {
+        _hasLocalPositionOverride = true;
+        LidarX = x; LidarY = y; LidarZ = z;
+    }
     internal void MarkHit() => Status = 1;
     private void UpdateFrom(float az, float el, float distance, float x, float y, float z, uint rdrId, byte status, byte valid)
-    { AzimuthDeg = az; ElevationDeg = el; DistanceM = distance; LidarX = x; LidarY = y; LidarZ = z; RdrId = rdrId; Status = status; Valid = valid; }
+    { AzimuthDeg = az; ElevationDeg = el; DistanceM = distance; if (!_hasLocalPositionOverride) { LidarX = x; LidarY = y; LidarZ = z; } RdrId = rdrId; Status = status; Valid = valid; }
     private void Set<T>(ref T field, T value, [CallerMemberName] string? name = null)
     {
         if (EqualityComparer<T>.Default.Equals(field, value)) return;
@@ -1723,4 +1761,93 @@ public sealed class TargetRecord : INotifyPropertyChanged
         };
         if (computed is not null) PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(computed));
     }
+}
+
+internal sealed class TargetCoordinateEditorWindow : Window
+{
+    private readonly TextBox _xInput;
+    private readonly TextBox _yInput;
+    private readonly TextBox _zInput;
+
+    internal float PositionX { get; private set; }
+    internal float PositionY { get; private set; }
+    internal float PositionZ { get; private set; }
+
+    internal TargetCoordinateEditorWindow(uint targetId, float x, float y, float z)
+    {
+        Title = $"TGT-{targetId} 좌표 수정";
+        Width = 340;
+        Height = 230;
+        ResizeMode = ResizeMode.NoResize;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        Background = new SolidColorBrush(Color.FromRgb(9, 20, 17));
+        Foreground = new SolidColorBrush(Color.FromRgb(226, 239, 232));
+
+        _xInput = CreateInput(x);
+        _yInput = CreateInput(y);
+        _zInput = CreateInput(z);
+
+        var root = new Grid { Margin = new Thickness(16) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        root.Children.Add(new TextBlock
+        {
+            Text = "발사 조준에 사용할 로컬 좌표 (m)",
+            FontWeight = FontWeights.Bold,
+            Margin = new Thickness(0, 0, 0, 10)
+        });
+        AddCoordinateRow(root, "X", _xInput, 1);
+        AddCoordinateRow(root, "Y", _yInput, 2);
+        AddCoordinateRow(root, "Z", _zInput, 3);
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
+        var save = new Button { Content = "적용", Width = 72, Margin = new Thickness(0, 0, 6, 0), IsDefault = true };
+        save.Click += (_, _) => SaveCoordinates();
+        var cancel = new Button { Content = "취소", Width = 72, IsCancel = true };
+        buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
+        Grid.SetRow(buttons, 4);
+        root.Children.Add(buttons);
+        Content = root;
+    }
+
+    private static TextBox CreateInput(float value) => new()
+    {
+        Text = value.ToString("0.00", System.Globalization.CultureInfo.CurrentCulture),
+        MinWidth = 190,
+        Margin = new Thickness(8, 3, 0, 3),
+        Padding = new Thickness(6, 3, 6, 3),
+        VerticalContentAlignment = VerticalAlignment.Center
+    };
+
+    private static void AddCoordinateRow(Grid root, string label, TextBox input, int row)
+    {
+        var line = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 2, 0, 2) };
+        line.Children.Add(new TextBlock { Text = label, Width = 28, VerticalAlignment = VerticalAlignment.Center });
+        line.Children.Add(input);
+        Grid.SetRow(line, row);
+        root.Children.Add(line);
+    }
+
+    private void SaveCoordinates()
+    {
+        if (!TryRead(_xInput, out var x) || !TryRead(_yInput, out var y) || !TryRead(_zInput, out var z))
+        {
+            MessageBox.Show(this, "X, Y, Z에 유효한 숫자를 입력하세요.", "좌표 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        PositionX = x;
+        PositionY = y;
+        PositionZ = z;
+        DialogResult = true;
+    }
+
+    private static bool TryRead(TextBox input, out float value) =>
+        (float.TryParse(input.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out value) ||
+         float.TryParse(input.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value)) &&
+        float.IsFinite(value);
 }
