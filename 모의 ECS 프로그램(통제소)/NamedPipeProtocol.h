@@ -126,9 +126,9 @@ struct PipeCommand
     std::uint32_t rdrId;        // 명령 대상 RDR ID
     std::uint32_t fcsId;        // 명령 대상 FCS ID
     std::uint32_t targetId;     // 객체 ID, 고각 설정은 0.1도 단위
-    float positionX;            // 자산 X 좌표(m)
-    float positionY;            // 자산 Y 좌표(m)
-    float positionZ;            // 자산 Z 좌표(m)
+    float positionX;            // 조준 명령에서는 목표 방위각(도), 자산 위치 명령에서는 X 좌표(m)
+    float positionY;            // 조준 명령에서는 목표 고각(도), 자산 위치 명령에서는 Y 좌표(m)
+    float positionZ;            // 조준 명령에서는 예약값, 자산 위치 명령에서는 Z 좌표(m)
 }; // 전체 크기: 40바이트
 
 

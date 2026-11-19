@@ -32,7 +32,8 @@ ControlStationMock.exe
 - 모의 ECS는 요청을 수신한 뒤 다음 SharedMemory 프레임의 RDRAsset.elevationDeg에 반영
 - 고각 설정 요청에는 RDR ID와 targetId 필드에 0.1도 단위의 정수 값을 사용하며, 파이프 구조체 크기는 바뀌지 않음
 - RDR 고각은 0.1도 단위 목표로 설정되며, 현재값은 최대 초당 25도씩 이동해 공유 메모리에 송신
-- 객체 할당 후 FCS는 FCS 좌표에서 객체 위치까지의 방위각·고각(각 최대 초당 25도)에 맞춰 이동하고, FCS 좌표에서 공유 메모리에 기록된 객체 위치까지의 목표 방위각과 고각이 맞으면 할당 완료 응답
+- 기존 AssignTarget 명령은 공유 메모리 객체 위치로 FCS 목표각을 계산
+- 수동/순차 조준(StartManualAim/AimBatchTarget)은 WPF가 PipeCommand.positionX/Y로 전달한 방위각/고각(각 최대 초당 25도)으로 FCS를 이동시키며, 두 각도가 목표값에 도달하면 조준 완료 상태로 전환
 - 공유 메모리는 100ms마다 갱신하며 모의 RDR 방위각은 100ms마다 2도(초당 20도)씩 0~270도 왕복
 
 공유 메모리
@@ -48,6 +49,9 @@ ControlStationMock.exe
 - 경로: \\.\pipe\ECS_NamedPipe
 - 프로토콜 버전: 3
 - PipeCommand 크기: 40바이트
+- StartManualAim(1003) 및 AimBatchTarget(1203) 요청은 positionX에 목표 방위각(0 이상 360 미만), positionY에 목표 고각(0~90), positionZ에 0을 전달
+- 모의 ECS는 해당 각도를 FCS 목표각으로 적용하며, 공유메모리의 FCS 방위각/고각이 목표각에 도달하면 조준 완료 상태로 전환
+- 각도 필드는 기존 PipeCommand의 float 세 필드를 명령별로 재사용하므로 프로토콜 버전과 구조체 크기는 바뀌지 않음
 - PipeResponse 크기: 40바이트
 
 참고

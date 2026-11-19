@@ -103,7 +103,7 @@ internal enum AssignmentState : uint
     StoppingCapture = 112
 }
 
-/// <summary>WPF에서 ECS로 보내는 28바이트 요청 구조체</summary>
+/// <summary>WPF에서 ECS로 보내는 40바이트 요청 구조체</summary>
 [StructLayout(LayoutKind.Sequential, Pack = 4)]
 internal struct PipeCommand
 {
@@ -114,9 +114,9 @@ internal struct PipeCommand
     public uint RdrId;       // 명령 대상 RDR ID
     public uint FcsId;       // 명령 대상 FCS ID
     public uint TargetId;    // 객체 ID, 미사용은 0; 고각 설정 명령에서는 목표 고각(0~90도)
-    public float PositionX;
-    public float PositionY;
-    public float PositionZ;
+    public float PositionX; // 조준 명령(StartManualAim/AimBatchTarget): 목표 방위각(도)
+    public float PositionY; // 조준 명령(StartManualAim/AimBatchTarget): 목표 고각(도)
+    public float PositionZ; // 조준 명령(StartManualAim/AimBatchTarget): 예약값
 }
 
 /// <summary>ECS에서 WPF로 돌려주는 40바이트 응답 구조체</summary>

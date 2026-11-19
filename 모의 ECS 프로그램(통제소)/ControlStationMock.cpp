@@ -159,6 +159,13 @@ namespace
         return azimuth;
     }
 
+    bool ValidAimAngles(float azimuthDeg, float elevationDeg)
+    {
+        return std::isfinite(azimuthDeg) && std::isfinite(elevationDeg) &&
+            azimuthDeg >= 0.0f && azimuthDeg < 360.0f &&
+            elevationDeg >= 0.0f && elevationDeg <= 90.0f;
+    }
+
     float MoveToward(float current, float target, float step)
     {
         if (current < target) return std::min(current + step, target);
@@ -647,12 +654,17 @@ namespace
         else if (type == CommandType::AimBatchTarget && state == AssignmentState::Confirmed &&
                  g_batchActiveTarget == 0 && g_rdrOperating && g_batchPaused)
         {
-            g_batchActiveTarget = g_targetId = targetId;
-            g_fcsTargetAzimuthDeg = TargetAzimuthFromFcs(targetId);
-            g_fcsTargetElevationDeg = TargetElevation(targetId);
-            g_fireState = 0;
-            g_assignment = state = AssignmentState::ManualAiming;
-            result = ResultCode::Success;
+            if (!ValidAimAngles(command.positionX, command.positionY))
+                result = ResultCode::InvalidRequest;
+            else
+            {
+                g_batchActiveTarget = g_targetId = targetId;
+                g_fcsTargetAzimuthDeg = command.positionX;
+                g_fcsTargetElevationDeg = command.positionY;
+                g_fireState = 0;
+                g_assignment = state = AssignmentState::ManualAiming;
+                result = ResultCode::Success;
+            }
         }
         else if (type == CommandType::PauseBatchScan && g_rdrOperating && !g_batchPaused &&
                  ((g_batchActiveTarget == 0 && state == AssignmentState::Confirmed) ||
@@ -873,6 +885,8 @@ namespace
                     result = ResultCode::InvalidRequest;
                 else if (step == 2 || step == 6 || step == 8)
                     result = ResultCode::NotSupported;
+                else if (step == 3 && !ValidAimAngles(command.positionX, command.positionY))
+                    result = ResultCode::InvalidRequest;
                 else if (step == 5 && fcsBusy)
                     result = ResultCode::StatusPending;
                 else if ((step == 4 || step == 5) && !g_rdrOperating)
@@ -884,8 +898,8 @@ namespace
                 }
                 else if (step == 3)
                 {
-                    g_fcsTargetAzimuthDeg = TargetAzimuthFromFcs(g_targetId);
-                    g_fcsTargetElevationDeg = TargetElevation(g_targetId);
+                    g_fcsTargetAzimuthDeg = command.positionX;
+                    g_fcsTargetElevationDeg = command.positionY;
                     g_assignment = AssignmentState::ManualAiming;
                 }
                 else
@@ -985,6 +999,10 @@ namespace
              << L", RDR=" << request.rdrId << L", FCS=" << request.fcsId;
         if (request.commandType == static_cast<std::uint32_t>(CommandType::SetRdrElevation))
             line << L", 고각=" << request.targetId << L"도";
+        else if (request.commandType == static_cast<std::uint32_t>(CommandType::StartManualAim) ||
+                 request.commandType == static_cast<std::uint32_t>(CommandType::AimBatchTarget))
+            line << L", 조준 목표 방위각/고각=" << std::fixed << std::setprecision(1)
+                 << request.positionX << L"/" << request.positionY << L"도";
         else if (request.targetId != 0)
             line << L", 객체=" << request.targetId;
         line << L" -> " << ResultName(response.resultCode)
