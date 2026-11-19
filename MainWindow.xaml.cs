@@ -1030,7 +1030,7 @@ public partial class MainWindow : Window
     private void ApplyCommandResponse(PipeResponse response)
     {
         var state = (AssignmentState)response.AssignmentState;
-        bool batch = (CommandType)response.CommandType is >= CommandType.GetBatchStatus and <= CommandType.RetryBatchTarget;
+        bool batch = (CommandType)response.CommandType is >= CommandType.GetBatchStatus and <= CommandType.StopBatchCapture;
         if (batch)
         {
             var result = (ResultCode)response.ResultCode;
@@ -1126,7 +1126,8 @@ public partial class MainWindow : Window
         AssignmentState.ManualAiming => "FCS 조준 중",
         AssignmentState.Aimed => "조준 완료",
         AssignmentState.ScanPaused => "라이다 조사 중지 완료",
-        AssignmentState.Firing => "실행 중",
+        AssignmentState.Firing => "촬영 중",
+        AssignmentState.StoppingCapture => "중지 확인 중",
         AssignmentState.FireConfirmed => "실행 완료",
         AssignmentState.ScanResumed => "조사 재개 완료 · 결과 판정 중",
         AssignmentState.ResultConfirmed => "결과 확인 · HIT",
@@ -1336,7 +1337,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     internal bool IsBatch { get; set; }
     internal bool AwaitingEcsSlot { get; set; }
     internal bool EcsSlotAvailable { get; set; }
-    internal bool IsFiring => _commandState == AssignmentState.Firing;
+    internal bool IsFiring => _commandState is AssignmentState.Firing or AssignmentState.StoppingCapture;
     internal bool HasUnfiredAim => _commandState is AssignmentState.ManualAiming or AssignmentState.ScanPaused;
     internal bool HasCommandState(AssignmentState state) => _commandState == state;
     internal uint BatchFlags { get; set; }
@@ -1346,21 +1347,23 @@ public sealed class AssignmentView : INotifyPropertyChanged
     internal bool ShowBatchResume { get; set; }
     public bool StageCommandsEnabled => HasAssignment && !_connectionPending && !IsStageCommandPending;
     internal bool IsScanPaused => IsBatch ? (BatchFlags & 1) != 0 :
-        _commandState is AssignmentState.ScanPaused or AssignmentState.Firing or AssignmentState.FireConfirmed;
+        _commandState is AssignmentState.ScanPaused or AssignmentState.Firing or AssignmentState.StoppingCapture or AssignmentState.FireConfirmed;
     public AssignmentStage PrimaryAction => _commandState switch
     {
         _ when AwaitingEcsSlot => Stages[0] with { ActionLabel = "처리 시작" },
         AssignmentState.TargetStillPresent when Stages[4].ActionLabel == "다시 시도" => Stages[4],
         AssignmentState.Confirmed when IsBatch && !IsScanPaused =>
             Stages[0] with { ActionLabel = "조사 일시 정지 필요", CanAdvance = false },
+        AssignmentState.Firing or AssignmentState.StoppingCapture => Stages[2],
         _ when ManualCompletedStep >= 3 && _commandState != AssignmentState.Failed => Stages[2] with { ActionLabel = "실행" },
         _ => Stages[0] with { ActionLabel = "조준" }
     };
     public bool CanUsePrimaryAction => StageCommandsEnabled && PrimaryAction.CanAdvance &&
         (PrimaryAction.ActionLabel != "실행" || CanFireFromList);
-    public bool CanFireFromList => StageCommandsEnabled && IsScanPaused && Stages[2].CanAdvance;
+    public bool CanFireFromList => StageCommandsEnabled && IsScanPaused && !IsFiring && Stages[2].CanAdvance;
     public string? ListActionLabel => Stages[0].Status.Length == 0 ? null : "할당 해제";
     public bool CanUseListAction => StageCommandsEnabled && ListActionLabel is not null &&
+        _commandState != AssignmentState.StoppingCapture &&
         (!IsBatch || _commandState is not (AssignmentState.Firing or AssignmentState.ScanResumed));
     public bool CanFire => StateText == "할당 완료";
     public bool LaunchRequested { get => _launchRequested; set { if (_launchRequested == value) return; _launchRequested = value; OnPropertyChanged(); } }
@@ -1381,6 +1384,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
     {
         AssignmentState.Failed => _lastManualStep,
         AssignmentState.ManualAiming => 2,
+        AssignmentState.StoppingCapture => 5,
         AssignmentState.TargetStillPresent => 8,
         >= AssignmentState.Detected and <= AssignmentState.ResultConfirmed => (int)_commandState.Value - 100,
         _ => 0
@@ -1532,6 +1536,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         {
             bool aiming = _commandState == AssignmentState.ManualAiming;
             bool firing = _commandState == AssignmentState.Firing;
+            bool stoppingCapture = _commandState == AssignmentState.StoppingCapture;
             bool batchPaused = IsBatch && (BatchFlags & 1) != 0;
             bool canAim = completed == 2 && !aiming &&
                 (target?.CanAssign == true || (batchPaused && target?.IsObservationWaiting == true)) &&
@@ -1562,8 +1567,12 @@ public sealed class AssignmentView : INotifyPropertyChanged
                 new(StageLabels[1], completed >= 4 || batchPaused ? "완료" : "대기", canPause,
                     IsBatch && batchPaused ? null : "중지", canPause)
                     { Command = IsBatch ? CommandType.PauseBatchScan : CommandType.PauseManualScan },
-                new(StageLabels[2], completed >= 6 ? "완료" : firing ? "실행 중" : "대기", completed is 4 or 5,
-                    "실행", canFire) { Command = IsBatch ? CommandType.FireBatchTarget : CommandType.StartManualFire },
+                firing || stoppingCapture
+                    ? new AssignmentStage("촬영 중지", stoppingCapture ? "중지 확인 중" : "촬영 중",
+                        true, stoppingCapture ? "중지 확인 중" : "중지", firing)
+                        { Command = IsBatch ? CommandType.StopBatchCapture : CommandType.StopManualCapture }
+                    : new AssignmentStage(StageLabels[2], completed >= 6 ? "완료" : "대기", completed == 4,
+                        "실행", canFire) { Command = IsBatch ? CommandType.FireBatchTarget : CommandType.StartManualFire },
                 new(StageLabels[3], completed >= 7 ? "완료" : completed == 6 ?
                     "재개 대기" : canResume ? "재개 가능" : "대기", canResume,
                     IsBatch ? (canResume ? "조사 재개" : null) : "재개", canResume)
