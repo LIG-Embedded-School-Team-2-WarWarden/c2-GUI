@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private readonly DashboardData _data = new();
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _commandStatusTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer _assignmentBlinkTimer = new() { Interval = TimeSpan.FromMilliseconds(450) };
     private readonly DispatcherTimer _rdrElevationSendTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly PipeCommandClient _pipeClient = new();
     private readonly Dictionary<uint, uint> _targetFcsSelections = new();
@@ -30,6 +31,8 @@ public partial class MainWindow : Window
     private bool _isSharedMemoryLive;
     private bool _isCommandPipeLive;
     private bool _isRefreshingCommandStatus;
+    private bool _assignmentBlinkOn = true;
+    private AssignmentView? _selectedAssignmentForBlink;
     private bool _supportsBatchAssignments;
     private bool? _previousConnectionState;
     private AssignmentState? _previousAssignmentState;
@@ -59,9 +62,15 @@ public partial class MainWindow : Window
         _frameReader = new SharedMemoryFrameReader();
         _frameReader.StateChanged += state => Dispatcher.BeginInvoke(() => ApplyConnectionState(state));
         _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
-        Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _frameReader.Start(); _commandStatusTimer.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
-        Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
+        Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _commandStatusTimer.Start(); _assignmentBlinkTimer.Start(); _frameReader.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
+        Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _assignmentBlinkTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
         _clock.Tick += (_, _) => UpdateClock();
+        _assignmentBlinkTimer.Tick += (_, _) =>
+        {
+            _assignmentBlinkOn = !_assignmentBlinkOn;
+            if (_selectedAssignmentForBlink is not null && _data.Assignments.Contains(_selectedAssignmentForBlink))
+                DrawRadar();
+        };
         _commandStatusTimer.Tick += async (_, _) => { await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrEmissionAsync(); await RefreshRdrStartupAsync(); };
         _rdrElevationSendTimer.Tick += async (_, _) =>
         {
@@ -691,16 +700,25 @@ public partial class MainWindow : Window
         {
             var point = Map(target.LidarX, target.LidarY);
             var isSelected = _selectedTargetId == target.Id;
-            var color = target.IsObservationWaiting ? Color.FromRgb(150, 160, 165) : isSelected ? Color.FromRgb(0, 162, 255) : target.Status == 1 ? Color.FromRgb(110, 120, 120) : target.Status == 2 ? Color.FromRgb(255, 176, 0) : Color.FromRgb(255, 65, 82);
+            var color = target.IsAimed ? Color.FromRgb(255, 65, 82)
+                : target.IsAssigned ? Color.FromRgb(255, 190, 35)
+                : target.IsObservationWaiting ? Color.FromRgb(150, 160, 165)
+                : isSelected ? Color.FromRgb(0, 162, 255)
+                : target.Status == 1 ? Color.FromRgb(110, 120, 120)
+                : target.Status == 2 ? Color.FromRgb(255, 176, 0)
+                : Color.FromRgb(0, 210, 145);
             var marker = new Polygon
             {
                 Fill = new SolidColorBrush(color),
-                Stroke = isSelected ? Brushes.LightCyan : Brushes.White,
-                StrokeThickness = isSelected ? 1.5 : 0.7,
+                Stroke = target.IsAimed ? new SolidColorBrush(Color.FromRgb(255, 205, 210))
+                    : target.IsAssigned ? new SolidColorBrush(Color.FromRgb(255, 225, 155))
+                    : isSelected ? Brushes.LightCyan : Brushes.White,
+                StrokeThickness = target.IsAimed || target.IsAssigned || isSelected ? 1.5 : 0.7,
                 Cursor = Cursors.Hand,
                 Tag = target.Id,
                 ToolTip = $"{target.DisplayName} · {target.StatusText}",
-                Opacity = target.IsObservationWaiting ? 0.45 : 1
+                Opacity = (target.IsObservationWaiting ? 0.45 : 1) *
+                    (_selectedAssignmentForBlink?.TargetId == target.Id && !_assignmentBlinkOn ? 0.2 : 1)
             };
             marker.Points.Add(new Point(point.X, point.Y - 6)); marker.Points.Add(new Point(point.X - 5, point.Y + 4)); marker.Points.Add(new Point(point.X + 5, point.Y + 4));
             marker.MouseLeftButtonDown += RadarTargetMouseLeftButtonDown;
@@ -740,6 +758,13 @@ public partial class MainWindow : Window
         var selectedId = (TargetGrid.SelectedItem as TargetRecord)?.Id;
         if (_selectedTargetId == selectedId) return;
         _selectedTargetId = selectedId;
+        DrawRadar();
+    }
+
+    private void AssignmentGridSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        _selectedAssignmentForBlink = AssignmentGrid.SelectedItem as AssignmentView;
+        _assignmentBlinkOn = true;
         DrawRadar();
     }
 
@@ -1231,6 +1256,14 @@ public partial class MainWindow : Window
 
     private void RefreshAssignments()
     {
+        bool targetVisualChanged = false;
+        foreach (var target in _data.Targets)
+        {
+            var isAssigned = _assignedTargets.Contains(target.Id);
+            var isAimed = _assignmentsByTarget.TryGetValue(target.Id, out var targetAssignment) && targetAssignment.HasAimed;
+            if (target.IsAssigned != isAssigned) { target.IsAssigned = isAssigned; targetVisualChanged = true; }
+            if (target.IsAimed != isAimed) { target.IsAimed = isAimed; targetVisualChanged = true; }
+        }
         var resumeRow = _data.Assignments.FirstOrDefault(row => row.CanOfferBatchResume && row.HasUnfiredAim)
             ?? _data.Assignments.FirstOrDefault(row => row.CanOfferBatchResume);
         foreach (var assignment in _data.Assignments)
@@ -1245,6 +1278,7 @@ public partial class MainWindow : Window
                 _isSharedMemoryLive, aimAngles);
         }
         RefreshAssignmentEmptyState();
+        if (targetVisualChanged) DrawRadar();
     }
 
     private bool LegacySlotOccupied(AssignmentView waiting) => _data.Assignments.Any(row =>
@@ -1333,7 +1367,10 @@ public sealed class AssignmentView : INotifyPropertyChanged
     public uint FcsId { get => _fcsId; set { if (_fcsId == value) return; _fcsId = value; OnPropertyChanged(); OnPropertyChanged(nameof(FcsName)); OnPropertyChanged(nameof(ProgressTitle)); } }
     public string FcsName => $"FCS-{FcsId:000}";
     public bool HasAssignment => TargetId != 0;
+    public bool IsAimed => HasAimed;
     internal bool IsConfirmedHit => _commandState == AssignmentState.ResultConfirmed;
+    internal bool HasAimed => _commandState is AssignmentState.Assigned or AssignmentState.Aimed ||
+        ManualCompletedStep >= 3;
     public string ProgressTitle => HasAssignment ? $"{TargetName}  →  {FcsName}" : "미할당";
     public IReadOnlyList<AssignmentStage> Stages { get; private set; } = StageLabels
         .Select(label => new AssignmentStage(label, "")).ToArray();
@@ -1427,6 +1464,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         StateText = "연결 시도 중";
         OnPropertyChanged(nameof(StageCommandsEnabled));
         OnPropertyChanged(nameof(CanEditAimAngles));
+        OnPropertyChanged(nameof(IsAimed));
     }
 
     public void SetConnectionFailed()
@@ -1436,6 +1474,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _commandState = null;
         StateText = "연결 실패 · 재시도 가능";
         OnPropertyChanged(nameof(CanEditAimAngles));
+        OnPropertyChanged(nameof(IsAimed));
     }
 
     internal void SetCommandStatus(AssignmentState state, uint fireState)
@@ -1451,6 +1490,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         }
         OnPropertyChanged(nameof(StageCommandsEnabled));
         OnPropertyChanged(nameof(CanEditAimAngles));
+        OnPropertyChanged(nameof(IsAimed));
         RefreshStateText(null, null);
     }
 
@@ -1496,6 +1536,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _fireState = 0;
         StateText = "명령 파이프 대기";
         OnPropertyChanged(nameof(CanEditAimAngles));
+        OnPropertyChanged(nameof(IsAimed));
     }
 
     public void Refresh(TargetRecord? target, FcsAsset? fcs) => Refresh(target, fcs, true);
@@ -1730,7 +1771,7 @@ public sealed class TargetRecord : INotifyPropertyChanged
     private float _distanceM, _lidarX, _lidarY, _lidarZ;
     private uint _rdrId;
     private byte _status, _valid;
-    private bool _isAssigned, _isAssignmentPending;
+    private bool _isAssigned, _isAssignmentPending, _isAimed;
     public float AzimuthDeg { get => _azimuthDeg; private set => Set(ref _azimuthDeg, value); }
     public float ElevationDeg { get => _elevationDeg; private set => Set(ref _elevationDeg, value); }
     public float DistanceM { get => _distanceM; private set => Set(ref _distanceM, value); }
@@ -1742,6 +1783,7 @@ public sealed class TargetRecord : INotifyPropertyChanged
     public byte Valid { get => _valid; private set => Set(ref _valid, value); }
     public bool IsAssigned { get => _isAssigned; set => Set(ref _isAssigned, value); }
     public bool IsAssignmentPending { get => _isAssignmentPending; set => Set(ref _isAssignmentPending, value); }
+    public bool IsAimed { get => _isAimed; internal set => Set(ref _isAimed, value); }
     public uint SelectedFcsId { get => _selectedFcsId; set { if (_selectedFcsId == value) return; _selectedFcsId = value; PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(SelectedFcsId))); } }
     public string DisplayName => $"TGT-{Id}";
     public string AzimuthText => $"{AzimuthDeg:0.0}°";

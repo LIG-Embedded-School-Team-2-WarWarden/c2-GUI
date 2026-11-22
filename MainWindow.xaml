@@ -1,7 +1,7 @@
 <Window x:Class="AadcCommandCenter.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AADC-9" Width="1500" Height="850"
+        Title="ECS UI" Width="1500" Height="850"
         MinWidth="760" MinHeight="480" WindowState="Maximized" Background="#07100F" Foreground="#C3D6CE"
         FontFamily="Consolas" WindowStartupLocation="CenterScreen" PreviewKeyDown="Window_PreviewKeyDown">
   <Window.Resources>
@@ -21,9 +21,9 @@
   <Grid Margin="8"><Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="*"/><RowDefinition Height="28"/></Grid.RowDefinitions>
     <Border BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1">
       <Grid>
-        <TextBlock Text="⬡  A A D C - 9" Foreground="{StaticResource Green}" FontSize="16" FontWeight="Bold"
-                   HorizontalAlignment="Left" VerticalAlignment="Center"/>
-        <TextBlock x:Name="ClockText" Foreground="{StaticResource Muted}" Margin="0,0,8,0"
+                <TextBlock Foreground="{StaticResource Green}" FontSize="16" FontWeight="Bold"
+                   HorizontalAlignment="Left" VerticalAlignment="Center"><Run Text="⬡"/><Run Language="ko-kr" Text=" "/><Run Text="ECS UI"/></TextBlock>
+                <TextBlock x:Name="ClockText" Foreground="{StaticResource Muted}" Margin="0,0,8,0"
                    HorizontalAlignment="Right" VerticalAlignment="Center"/>
       </Grid>
     </Border>
@@ -157,6 +157,7 @@
                          TextTrimming="CharacterEllipsis"/>
             </DockPanel>
             <DataGrid x:Name="AssignmentGrid" Grid.Row="1" ItemsSource="{Binding Assignments}"
+                      SelectionChanged="AssignmentGridSelectionChanged" SelectionMode="Single" SelectionUnit="FullRow"
                       AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True"
                       HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F"
                       RowBackground="#07100F" AlternatingRowBackground="#091411" FontSize="11">
