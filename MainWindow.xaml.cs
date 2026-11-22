@@ -122,7 +122,7 @@ public partial class MainWindow : Window
             .Select(x => new RdrAsset(x.rdrId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.positionZ, x.fieldOfViewDeg)).ToArray();
         var fcs = payload.fcsAssets.Take((int)payload.fcsCount)
             .Select(x => new FcsAsset(x.fcsId, x.isEnabled != 0, x.isOperating != 0, x.isConnected != 0, x.laserOn != 0, x.azimuthDeg, x.elevationDeg, x.positionX, x.positionY, x.positionZ)).ToArray();
-        var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1 || (x.valid == 0 && x.status is 4 or 5))
+        var targets = payload.targets.Take((int)payload.targetCount).Where(x => x.valid == 1 || (x.valid == 0 && x.status is 1 or 4 or 5))
             .Select(x => new TargetRecord(x.targetId, x.azimuthDeg, x.elevationDeg, x.distanceM, x.lidarX, x.lidarY, x.lidarZ, x.rdrId, x.status, x.valid == 1,
                 _targetFcsSelections.TryGetValue(x.targetId, out var selectedFcsId) ? selectedFcsId : payload.selectedFcsId,
                 _assignedTargets.Contains(x.targetId))).ToArray();
@@ -984,6 +984,8 @@ public partial class MainWindow : Window
                 ApplyCommandResponse(response.Value);
             }
             if (result == ResultCode.Success) AddLog($"{stage.Label} · {assignment.TargetName} → {assignment.FcsName}");
+            else if (command == CommandType.PauseBatchScan && result == ResultCode.TargetPending)
+                ShowAlert("배치에 등록된 객체 중 최신 실측이 확인되지 않은 객체가 있습니다. 객체가 다시 관측되면 중지를 다시 누르세요.", stage.Label);
             else ShowAlert(CommandResultText(result), stage.Label);
         }
         finally

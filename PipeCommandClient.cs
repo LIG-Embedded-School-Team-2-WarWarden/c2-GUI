@@ -141,6 +141,7 @@ internal sealed class PipeCommandClient : IDisposable
     internal const uint Version = 3;
     private const string Server = ".";
     private const string PipeName = "ECS_NamedPipe";
+    private static readonly TimeSpan BatchObservationRetryDelay = TimeSpan.FromMilliseconds(1100);
     private readonly SemaphoreSlim gate = new(1, 1);
     private NamedPipeClientStream? pipe;
     private uint requestId = 1;
@@ -152,12 +153,12 @@ internal sealed class PipeCommandClient : IDisposable
         try
         {
             await EnsureConnectedAsync(cancellationToken);
+            var connection = pipe!;
             var command = new PipeCommand
             {
                 Magic = Magic,
                 Version = Version,
                 CommandType = (uint)type,
-                RequestId = requestId++,
                 RdrId = rdrId,
                 FcsId = fcsId,
                 TargetId = targetId,
@@ -165,11 +166,21 @@ internal sealed class PipeCommandClient : IDisposable
             };
             try
             {
-                await WriteStructAsync(pipe!, command, cancellationToken);
-                PipeResponse response = await ReadStructAsync<PipeResponse>(pipe!, cancellationToken);
-                if (response.Magic != Magic || response.Version != Version || response.RequestId != command.RequestId)
-                    throw new IOException("ECS 응답의 식별값, 버전 또는 요청 번호가 일치하지 않습니다.");
-                return response;
+                for (int attempt = 0; ; attempt++)
+                {
+                    command.RequestId = requestId++;
+                    await WriteStructAsync(connection, command, cancellationToken);
+                    PipeResponse response = await ReadStructAsync<PipeResponse>(connection, cancellationToken);
+                    if (response.Magic != Magic || response.Version != Version || response.RequestId != command.RequestId)
+                        throw new IOException("ECS 응답의 식별값, 버전 또는 요청 번호가 일치하지 않습니다.");
+                    if (attempt != 0 || type != CommandType.PauseBatchScan ||
+                        response.CommandType != (uint)type || response.IsConnected == 0 ||
+                        response.ResultCode != (uint)ResultCode.TargetPending)
+                        return response;
+
+                    // The ECS rejected this request before sending STOP. Check fresh observations once more.
+                    await Task.Delay(BatchObservationRetryDelay, cancellationToken);
+                }
             }
             catch
             {

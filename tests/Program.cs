@@ -112,6 +112,14 @@ static class Checks
             apply.Invoke(window,new object[]{Frame(0,1)});
             restored.Refresh((TargetRecord)grid.Items[0],null);
             Check(restored.Stages[^1].ActionLabel=="다시 시도","same-ID retry must remain available");
+            apply.Invoke(window,new object[]{Frame(1,0)});
+            var hit=(TargetRecord)grid.Items[0];
+            Check(hit.StatusText=="HIT" && !hit.CanAssign && hit.LidarX==1,"ECS HIT display failed");
+            apply.Invoke(window,new object[]{Frame(0,1,8)});
+            Check(grid.Items.Count==1 && ((TargetRecord)grid.Items[0]).Id==8,"GUI retained an ECS-evicted HIT");
+            apply.Invoke(window,new object[]{Frame(1,0)});
+            connection.Invoke(window,new object[]{"WAITING"});
+            Check(grid.Items.Count==0,"GUI cached HIT after ECS disconnected");
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
         finally { window.Close(); app.Shutdown(); }
