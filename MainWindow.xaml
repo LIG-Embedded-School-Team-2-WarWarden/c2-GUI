@@ -193,10 +193,24 @@
                                 <Setter Property="Foreground" Value="#FFE299"/>
                                 <Setter Property="BorderBrush" Value="#B98B2D"/>
                               </DataTrigger>
-                              <DataTrigger Binding="{Binding PrimaryAction.Label}" Value="촬영 중지">
+                              <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                  <Condition Binding="{Binding PrimaryAction.Label}" Value="촬영 중지"/>
+                                  <Condition Binding="{Binding CanUsePrimaryAction}" Value="True"/>
+                                </MultiDataTrigger.Conditions>
                                 <Setter Property="Background" Value="#6B4A0D"/>
                                 <Setter Property="Foreground" Value="#FFE299"/>
                                 <Setter Property="BorderBrush" Value="#D9AA46"/>
+                              </MultiDataTrigger>
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="중지 확인 중">
+                                <Setter Property="Background" Value="#303437"/>
+                                <Setter Property="Foreground" Value="#E1E4E6"/>
+                                <Setter Property="BorderBrush" Value="#686E73"/>
+                              </DataTrigger>
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="촬영 종료">
+                                <Setter Property="Background" Value="#303437"/>
+                                <Setter Property="Foreground" Value="#E1E4E6"/>
+                                <Setter Property="BorderBrush" Value="#686E73"/>
                               </DataTrigger>
                               <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="실행">
                                 <Setter Property="Background" Value="#571B25"/>

@@ -11,7 +11,7 @@ static class Checks
     static void Check(bool b, string reason) { if (!b) throw new Exception(reason); }
     [STAThread] static void Main()
     {
-        var app = new App(); app.InitializeComponent();
+        var app = new Application();
         Check(LidarEmissionStatus.Text(true,null)=="구동 중 / 방출 상태 미확인", "unknown was confused with OFF");
         Check(LidarEmissionStatus.Text(true,false).Contains("OFF 확인"), "confirmed OFF missing");
         Check(LidarEmissionStatus.Text(true,true).Contains("ON 확인"), "confirmed ON missing");
@@ -97,14 +97,40 @@ static class Checks
             Manual(restored,"Failed","LidarStopWarningUnconfirmed",4);Check(restored.StateText.Contains("온도 경고"),"warning reason lost");
             Manual(restored,"Confirmed","Success",2);restored.Refresh(null,null);
             Check(!restored.Stages.Any(s=>s.Status=="완료"),"retry kept old completion");
-            Manual(restored,"Firing","Success",5);restored.Refresh(null,null);
-            Check(restored.PrimaryAction.ActionLabel=="중지"&&restored.PrimaryAction.CanAdvance,
-                "a capturing row must offer the stop action");
+            var assignmentGrid = (DataGrid)window.FindName("AssignmentGrid");
+            var actionColumn = assignmentGrid.Columns.OfType<DataGridTemplateColumn>()
+                .Single(column => Equals(column.Header, "조작"));
+            var actionButton = (Button)actionColumn.CellTemplate.LoadContent();
+            actionButton.DataContext = restored;
+            void CheckCaptureButton(string label, bool enabled, string background)
+            {
+                actionButton.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.DataBind);
+                Check(Equals(actionButton.Content, label) && actionButton.IsEnabled == enabled &&
+                    actionButton.Background is SolidColorBrush brush &&
+                    brush.Color == (Color)ColorConverter.ConvertFromString(background),
+                    $"capture button mismatch for {label}: {actionButton.Content}, {actionButton.IsEnabled}, {actionButton.Background}");
+            }
+
+            var setPending = typeof(AssignmentView).GetMethod("SetPendingStageCommand", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            foreach (var stopCommand in new[] { "StopManualCapture", "StopBatchCapture" })
+            {
+                Manual(restored,"Firing","Success",5);restored.Refresh(null,null);
+                CheckCaptureButton("중지", true, "#6B4A0D");
+                setPending.Invoke(restored, new[] { Enum.Parse(
+                    Nullable.GetUnderlyingType(setPending.GetParameters()[0].ParameterType)!, stopCommand) });
+                CheckCaptureButton("중지 확인 중", false, "#303437");
+                setPending.Invoke(restored, new object?[] { null });
+                CheckCaptureButton("중지", true, "#6B4A0D");
+            }
             Manual(restored,"StoppingCapture","Success",5);restored.Refresh(null,null);
-            Check(restored.PrimaryAction.ActionLabel=="중지 확인 중"&&!restored.PrimaryAction.CanAdvance&&
-                !restored.Stages[3].CanAdvance&&restored.TargetId==7,
+            CheckCaptureButton("중지 확인 중", false, "#303437");
+            Check(!restored.Stages[3].CanAdvance && restored.TargetId == 7,
                 "stopping must keep the assignment and wait for confirmed return");
+            Manual(restored,"Failed","StatusPending",5);restored.Refresh(null,null);
+            Check(!Equals(actionButton.Content, "촬영 종료") && !actionButton.IsEnabled,
+                "a failed stop must not look like confirmed capture completion");
             Manual(restored,"FireConfirmed","Success",6);restored.Refresh(null,null);
+            CheckCaptureButton("촬영 종료", false, "#303437");
             Check(restored.Stages[3].CanAdvance&&restored.Stages[3].Status=="재개 대기","manual resume unavailable");
             Manual(restored,"TargetStillPresent","Success",8);restored.Refresh(null,null);
             Check(restored.Stages[^1].ActionLabel=="할당 해제"&&restored.Stages[^1].CanAdvance,"missing ID must offer release instead of broken retry");
