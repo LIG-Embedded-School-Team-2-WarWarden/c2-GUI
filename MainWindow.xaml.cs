@@ -970,7 +970,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        assignment.SetStageCommandPending(true);
+        assignment.SetPendingStageCommand(command);
         RefreshAssignmentScanControls();
         try
         {
@@ -990,7 +990,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            assignment.SetStageCommandPending(false);
+            assignment.SetPendingStageCommand(null);
             RefreshAssignments();
         }
     }
@@ -1398,7 +1398,8 @@ public sealed class AssignmentView : INotifyPropertyChanged
     public bool CanRetry => _connectionFailed || _commandState == AssignmentState.Failed;
     public bool IsActiveCommandState => _connectionPending || _commandState is AssignmentState.Adjusting or AssignmentState.Assigned ||
         ManualCompletedStep > 0 || _fireState != 0;
-    public bool IsStageCommandPending { get; private set; }
+    private CommandType? _pendingStageCommand;
+    public bool IsStageCommandPending => _pendingStageCommand.HasValue;
     internal bool IsConnecting => _connectionPending;
     internal bool IsBatch { get; set; }
     internal bool AwaitingEcsSlot { get; set; }
@@ -1422,7 +1423,11 @@ public sealed class AssignmentView : INotifyPropertyChanged
         AssignmentState.TargetStillPresent when Stages[4].ActionLabel == "다시 시도" => Stages[4],
         AssignmentState.Confirmed when IsBatch && !IsScanPaused =>
             Stages[0] with { ActionLabel = "조사 일시 정지 필요", CanAdvance = false },
+        AssignmentState.Firing when _pendingStageCommand is CommandType.StopManualCapture or CommandType.StopBatchCapture =>
+            Stages[2] with { ActionLabel = "중지 확인 중", CanAdvance = false, Command = null },
         AssignmentState.Firing or AssignmentState.StoppingCapture => Stages[2],
+        AssignmentState.FireConfirmed or AssignmentState.ScanResumed or AssignmentState.ResultConfirmed or AssignmentState.TargetStillPresent =>
+            Stages[2] with { ActionLabel = "촬영 종료", CanAdvance = false, Command = null },
         _ when ManualCompletedStep >= 3 && _commandState != AssignmentState.Failed => Stages[2] with { ActionLabel = "실행" },
         _ => Stages[0] with { ActionLabel = "조준" }
     };
@@ -1439,9 +1444,9 @@ public sealed class AssignmentView : INotifyPropertyChanged
 
     public AssignmentView(uint targetId, uint fcsId) { TargetId = targetId; _fcsId = fcsId; }
 
-    public void SetStageCommandPending(bool pending)
+    internal void SetPendingStageCommand(CommandType? command)
     {
-        IsStageCommandPending = pending;
+        _pendingStageCommand = command;
         OnPropertyChanged(nameof(StageCommandsEnabled));
         NotifyListActions();
     }
