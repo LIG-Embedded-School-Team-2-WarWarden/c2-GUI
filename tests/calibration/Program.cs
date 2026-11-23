@@ -21,8 +21,8 @@ internal static class Program
         Check(Math.Abs(fit.ValidationRms-1)<1e-8,"validation must not alter fit");
         try {CalibrationMath.Fit(new[]{train[0],train[0],train[0]});throw new Exception("duplicate points accepted");}catch(InvalidOperationException){}
         var data=new DashboardData();
+        data.RdrAssets.Add(new RdrAsset(1,true,true,true,135,0,10,20,30,120));
         data.FcsAssets.Add(new FcsAsset(1,true,false,true,false,135,5,0,0,0));
-        // RDR is optional in this fixture; all points and FCS still render.
         for(uint i=1;i<=4;i++)data.Targets.Add(new TargetRecord(i,0,0,10,i*2,10+i,1+i,1,0,true,1,false));
         int moves=0;bool live=true;
         float motorPan=182,motorTilt=8;
@@ -43,8 +43,23 @@ internal static class Program
         targets.SelectedItem=data.Targets[3];Call("CaptureReference");((CheckBox)Field("validation")).IsChecked=true;Call("SaveSample");((CheckBox)Field("validation")).IsChecked=false;
         Check(File.Exists(path),"samples persisted");
         var archive=System.Text.Json.JsonSerializer.Deserialize<CalibrationArchive>(File.ReadAllText(path))!;
-        Check(archive.Samples.Count==4&&archive.OriginalOffsets[0]==7,"archive retains samples and original offsets");
+        Check(archive.Version==3&&archive.Installation.Length==6&&archive.Samples.Count==4&&archive.OriginalOffsets[0]==7,
+            "RDR-local archive retains samples, installation evidence and original offsets");
+        Check(Math.Abs(archive.Samples[0].X-(data.Targets[0].LidarX-10))<1e-6&&
+            Math.Abs(archive.Samples[0].Y-(data.Targets[0].LidarY-20))<1e-6&&
+            Math.Abs(archive.Samples[0].Z-(data.Targets[0].LidarZ-30))<1e-6,"new samples were not stored RDR-local");
+        var legacySample=archive.Samples[0] with {X=11,Y=22,Z=33};
+        var migrated=CalibrationWindow.RdrLocalSamples(new CalibrationArchive(2,archive.OriginalOffsets,
+            new float[]{10,20,30,40,50,60},new List<CalibrationSample>{legacySample}));
+        Check(migrated[0].X==1&&migrated[0].Y==2&&migrated[0].Z==3,
+            "legacy world-coordinate session did not migrate to RDR-local coordinates");
+        var unchanged=CalibrationWindow.RdrLocalSamples(new CalibrationArchive(3,archive.OriginalOffsets,
+            new float[]{100,200,300,400,500,600},new List<CalibrationSample>{legacySample}));
+        Check(unchanged[0].X==11&&unchanged[0].Y==22&&unchanged[0].Z==33,
+            "RDR-local session was changed by absolute installation coordinates");
         Check(CalibrationMath.Fit(archive.Samples).Pan==2,"GUI collection uses raw baseline, not old offset");
+        data.RdrAssets[0].UpdateFrom(new RdrAsset(1,true,true,true,135,0,100,200,300,120));
+        typeof(CalibrationWindow).GetMethod("Check",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(window,null);
         targets.SelectedItem=data.Targets[0];Call("CaptureReference");live=false;
         try {Call("SaveSample");throw new Exception("disconnected sample accepted");}catch(IOException){}
         live=true;

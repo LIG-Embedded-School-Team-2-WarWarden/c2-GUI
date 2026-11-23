@@ -37,6 +37,11 @@ internal static class GeometryChecks
         Check(fit.ValidationRms<fit.BaselineRms*.2,"3D model did not improve over fixed offsets");
         Check(GeometrySolver.Norm(fit.Model.Translation.Zip(truth.Translation,(a,b)=>a-b).ToArray())<.03,"translation not recovered");
         Check(GeometrySolver.Norm(fit.Model.Rotation.Zip(truth.Rotation,(a,b)=>a-b).ToArray())<.01,"rotation not recovered");
+        var localSamples=samples.Select(s=>s with {X=s.X-origin[0],Y=s.Y-origin[1],Z=s.Z-origin[2]}).ToArray();
+        var localFit=GeometrySolver.Fit(localSamples,new double[3],offsets);
+        Check(localFit.CanApply&&GeometrySolver.Norm(localFit.Model.Translation.Zip(fit.Model.Translation,(a,b)=>a-b).ToArray())<1e-8&&
+            GeometrySolver.Norm(localFit.Model.Rotation.Zip(fit.Model.Rotation,(a,b)=>a-b).ToArray())<1e-8,
+            "RDR-local fit changed with absolute installation origin");
         var before=fit.Model.Translation.ToArray();
         var corrupt=samples.Select(s=>s.Validation?s with{ActualPan=s.ActualPan+8}:s).ToArray();
         var failed=GeometrySolver.Fit(corrupt,origin,offsets);

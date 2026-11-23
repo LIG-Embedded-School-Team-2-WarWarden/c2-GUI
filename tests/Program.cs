@@ -23,6 +23,16 @@ static class Checks
         var window = new MainWindow();
         try
         {
+            var commandType = typeof(MainWindow).Assembly.GetType("AadcCommandCenter.CommandType")!;
+            Check(Convert.ToUInt32(Enum.Parse(commandType, "StartContinuousPhotos")) == 1210 &&
+                Convert.ToUInt32(Enum.Parse(commandType, "GetContinuousPhotoStatus")) == 1211 &&
+                Convert.ToUInt32(Enum.Parse(commandType, "StopContinuousPhotos")) == 1212,
+                "continuous photo IPC command contract changed");
+            CheckContinuousPhotoResponses(commandType);
+            CheckTargetAngleEditor();
+            Check(window.FindName("ContinuousPhotoButton") is Button &&
+                window.FindName("ContinuousPhotoStatus") is TextBlock,
+                "continuous photo controls missing from assignment panel");
             var apply = typeof(MainWindow).GetMethod("ApplyFrame", BindingFlags.NonPublic|BindingFlags.Instance)!;
             typeof(MainWindow).GetField("_isSharedMemoryLive",BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(window,true);
             var grid = (DataGrid)window.FindName("TargetGrid");
@@ -97,6 +107,33 @@ static class Checks
             Manual(restored,"Failed","LidarStopWarningUnconfirmed",4);Check(restored.StateText.Contains("온도 경고"),"warning reason lost");
             Manual(restored,"Confirmed","Success",2);restored.Refresh(null,null);
             Check(!restored.Stages.Any(s=>s.Status=="완료"),"retry kept old completion");
+            Check(restored.CanEditAimAngles,"confirmed target angle was not editable");
+            Manual(restored,"Aimed","Success",3);restored.Refresh(null,null);
+            Check(restored.CanEditAimAngles,"aimed target angle could not be corrected");
+            Manual(restored,"ScanPaused","Success",4);restored.Refresh(null,null);
+            Check(restored.CanEditAimAngles,"paused target angle could not be corrected");
+            Manual(restored,"ManualAiming","Success",2);restored.Refresh(null,null);
+            Check(!restored.CanEditAimAngles,"angle editor remained enabled while FCS was moving");
+            Manual(restored,"Confirmed","Success",2);restored.Refresh(null,null);
+            typeof(AssignmentView).GetProperty("IsBatch", BindingFlags.NonPublic|BindingFlags.Instance)!
+                .SetValue(restored, true);
+            typeof(AssignmentView).GetProperty("BatchFlags", BindingFlags.NonPublic|BindingFlags.Instance)!
+                .SetValue(restored, 13u);
+            Check(restored.StageCommandsEnabled && restored.CanEditAimAngles,
+                "paused assignment was not ready before continuous photo lock");
+            typeof(AssignmentView).GetProperty("ContinuousPhotosActive",
+                BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(restored, true);
+            Check(!restored.StageCommandsEnabled && !restored.CanUsePrimaryAction &&
+                !restored.CanEditAimAngles && !restored.CanUseListAction,
+                "continuous photos did not lock row controls");
+            typeof(AssignmentView).GetProperty("ContinuousPhotosActive",
+                BindingFlags.NonPublic|BindingFlags.Instance)!.SetValue(restored, false);
+            Check(restored.StageCommandsEnabled && restored.CanEditAimAngles,
+                "row controls did not recover after continuous photos");
+            typeof(AssignmentView).GetProperty("IsBatch", BindingFlags.NonPublic|BindingFlags.Instance)!
+                .SetValue(restored, false);
+            typeof(AssignmentView).GetProperty("BatchFlags", BindingFlags.NonPublic|BindingFlags.Instance)!
+                .SetValue(restored, 0u);
             var assignmentGrid = (DataGrid)window.FindName("AssignmentGrid");
             var actionColumn = assignmentGrid.Columns.OfType<DataGridTemplateColumn>()
                 .Single(column => Equals(column.Header, "조작"));
@@ -149,5 +186,73 @@ static class Checks
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
         finally { window.Close(); app.Shutdown(); }
+    }
+
+    static void CheckContinuousPhotoResponses(Type commandType)
+    {
+        var windowType = typeof(MainWindow);
+        var responseType = windowType.Assembly.GetType("AadcCommandCenter.PipeResponse")!;
+        var resultType = windowType.Assembly.GetType("AadcCommandCenter.ResultCode")!;
+        var parser = windowType.GetMethod("TryReadContinuousPhotoResponse",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        object Response(string command, uint result, uint total, uint phase, uint confirmed)
+        {
+            object response = Activator.CreateInstance(responseType)!;
+            void Field(string name, uint value) => responseType.GetField(name)!.SetValue(response, value);
+            Field("CommandType", Convert.ToUInt32(Enum.Parse(commandType, command)));
+            Field("ResultCode", result);
+            Field("FcsId", 1);
+            Field("AssignedTargetId", total);
+            Field("AssignmentState", phase);
+            Field("FireState", confirmed);
+            Field("IsConnected", 1);
+            return response;
+        }
+        bool Parse(object response, string command, int previous, int? total, out object? state)
+        {
+            var args = new object?[] { response, Enum.Parse(commandType, command), previous, total, null, null };
+            bool accepted = (bool)parser.Invoke(null, args)!;
+            state = args[4];
+            return accepted;
+        }
+
+        uint busy = Convert.ToUInt32(Enum.Parse(resultType, "DeviceBusy"));
+        Check(Parse(Response("StartContinuousPhotos", busy, 0, 0, 0),
+                "StartContinuousPhotos", 0, null, out var rejected) && rejected != null,
+            "authoritative rejected start was not accepted");
+        Check(Parse(Response("StopContinuousPhotos", 0, 0, 0, 0),
+                "StopContinuousPhotos", 5, 9, out _),
+            "authoritative idle response after confirmed frames was rejected");
+        Check(!Parse(Response("GetContinuousPhotoStatus", 0, 9, 1, 4),
+                "GetContinuousPhotoStatus", 5, 9, out _),
+            "confirmed photo count was allowed to move backwards");
+        Check(!Parse(Response("GetContinuousPhotoStatus", 0, 18, 1, 5),
+                "GetContinuousPhotoStatus", 5, 9, out _),
+            "planned photo total was allowed to change while running");
+    }
+
+    static void CheckTargetAngleEditor()
+    {
+        var type = typeof(MainWindow).Assembly.GetType("AadcCommandCenter.TargetAngleEditorWindow")!;
+        var valid = type.GetMethod("IsValidAngles", BindingFlags.NonPublic | BindingFlags.Static)!;
+        bool Valid(float azimuth, float elevation) => (bool)valid.Invoke(null, new object[] { azimuth, elevation })!;
+        Check(Valid(0, -30) && Valid(359.9f, 90) && !Valid(360, 0) && !Valid(20, -30.1f),
+            "operator angle limits changed");
+
+        var editor = (Window)Activator.CreateInstance(type, BindingFlags.NonPublic | BindingFlags.Instance,
+            null, new object[] { 7u, 135f, -5f }, null)!;
+        try
+        {
+            IEnumerable<object> Children(object parent) => parent switch
+            {
+                Panel panel => panel.Children.Cast<object>().SelectMany(child => new[] { child }.Concat(Children(child))),
+                ContentControl content when content.Content is not null =>
+                    new[] { content.Content }.Concat(Children(content.Content)),
+                _ => Enumerable.Empty<object>()
+            };
+            Check(Children(editor).OfType<Button>().Any(button => Equals(button.Content, "자동 계산 복원")),
+                "automatic ECS angle restore control missing");
+        }
+        finally { editor.Close(); }
     }
 }
