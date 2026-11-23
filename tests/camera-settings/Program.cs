@@ -24,11 +24,13 @@ class Program
         var owner = new Window { Width = 1480, Height = 820 };
         new System.Windows.Interop.WindowInteropHelper(owner).EnsureHandle();
         var window = (Window)Activator.CreateInstance(type, BindingFlags.Instance | BindingFlags.NonPublic, null,
-            new object[] { owner, new float[] { 0,0,0 }, new float[] { 2,1,0 }, new float[] { 1.5f,10,3 }, new float[] {120,45,0}, save, 1d }, null)!;
+            new object[] { owner, new float[] { 0,0,0 }, new float[] { 2,1,0 },
+                new float[] { 1.5f,10,3 }, new float[] {120,45,0},
+                new float[] {.05f,1,0}, save, 1d }, null)!;
         var root = (StackPanel)((ScrollViewer)window.Content).Content;
         var rows = root.Children.OfType<StackPanel>().ToArray();
-        var preview = root.Children.OfType<FrameworkElement>().Single(x => x.GetType().Name == "RangePreview");
-        if (rows.Length != 4) throw new Exception("Angle editor still present in equipment settings");
+        var preview = (FrameworkElement)root.Children.OfType<Expander>().Single().Content;
+        if (rows.Length != 5) throw new Exception("Unexpected equipment settings row count");
         var inputs = rows[2].Children.OfType<StackPanel>().SelectMany(x => x.Children.OfType<TextBox>()).ToArray();
         var button = rows[2].Children.OfType<Button>().Single();
         void Click() => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -54,6 +56,17 @@ class Program
         angleSave.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Check(calls == 3, "FOV save callback missing");
         Check(((float[])preview.GetType().GetProperty("Fov")!.GetValue(preview)!)[0] == 90, "FOV preview stale");
+        var photoInputs = rows[4].Children.OfType<StackPanel>().SelectMany(x => x.Children.OfType<TextBox>()).ToArray();
+        var photoSave = rows[4].Children.OfType<Button>().Single();
+        Check(rows[4].Children.OfType<StackPanel>().SelectMany(x => x.Children.OfType<TextBlock>())
+                .Any(x => x.Text == "축별 최대 보정 범위 (cm)"),
+            "Photo coverage setting does not describe the per-axis square extent");
+        photoInputs[0].Text = "5"; photoInputs[1].Text = "1.5";
+        photoSave.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(calls == 3, "Fractional photo ring count accepted");
+        photoInputs[1].Text = "2";
+        photoSave.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Check(calls == 4, "Photo settings save callback missing");
         root.Measure(new Size(680, double.PositiveInfinity));
         root.Arrange(new Rect(0,0,680,root.DesiredSize.Height)); root.UpdateLayout();
         var bitmap = new RenderTargetBitmap(680,(int)Math.Ceiling(root.ActualHeight + 40),96,96,PixelFormats.Pbgra32);

@@ -143,6 +143,7 @@
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <DockPanel Margin="8,5">
               <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -153,6 +154,10 @@
               </StackPanel>
               <TextBlock DockPanel.Dock="Left" Text="객체 할당 정보" Foreground="{StaticResource Green}"
                          FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
+              <Button x:Name="ContinuousPhotoButton" DockPanel.Dock="Left" Content="전체 연속 촬영"
+                      Style="{StaticResource AssignmentButtonStyle}" Margin="0,0,8,0" IsEnabled="False"
+                      Click="ContinuousPhotoClick" ToolTipService.ShowOnDisabled="True"
+                      ToolTip="조사 일시 중지가 확인된 뒤 할당된 모든 객체를 연속 촬영합니다."/>
               <TextBlock x:Name="AssignmentScanStatusText" Foreground="#92AFA5" VerticalAlignment="Center"
                          TextTrimming="CharacterEllipsis"/>
             </DockPanel>
@@ -222,6 +227,15 @@
                                 <Setter Property="Foreground" Value="#FFBCC2"/>
                                 <Setter Property="BorderBrush" Value="#AD4957"/>
                               </DataTrigger>
+                              <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                  <Condition Binding="{Binding PrimaryAction.ActionLabel}" Value="조준"/>
+                                  <Condition Binding="{Binding CanUsePrimaryAction}" Value="False"/>
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Background" Value="#303437"/>
+                                <Setter Property="Foreground" Value="#A6AEAD"/>
+                                <Setter Property="BorderBrush" Value="#565D5C"/>
+                              </MultiDataTrigger>
                             </Style.Triggers>
                           </Style>
                         </Button.Style>
@@ -251,12 +265,15 @@
             </DataGrid>
             <TextBlock x:Name="AssignmentEmptyState" Grid.Row="1" Text="미할당" Foreground="{StaticResource Muted}"
                        HorizontalAlignment="Center" VerticalAlignment="Center" IsHitTestVisible="False"/>
+            <TextBlock x:Name="ContinuousPhotoStatus" Grid.Row="2" Visibility="Collapsed"
+                       Margin="8,3,8,5" VerticalAlignment="Center" TextWrapping="Wrap"
+                       Foreground="#A8C9BC"/>
           </Grid>
         </Border>
         <Border Grid.Row="3" Margin="0,6,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Panel}"><Grid><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><StackPanel Orientation="Horizontal" Margin="10,3" VerticalAlignment="Center"><TextBlock Text="이벤트 로그" Foreground="{StaticResource Green}" VerticalAlignment="Center"/><Button Content="로그파일 열기" Click="OpenEventLogClick" Margin="8,0,0,0" Width="82" Height="19" Padding="3,0" FontSize="9"/></StackPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#8BB0A1" FontSize="11"/></Grid></Border>
       </Grid>
       <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
-      <Border Grid.Column="4" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="8"><TextBlock Text="FCS" Foreground="{StaticResource Green}" FontSize="15" FontWeight="Bold"/><ComboBox x:Name="FcsSelector" Margin="0,5,0,4" DisplayMemberPath="DisplayName" SelectionChanged="FcsSelectionChanged"/><UniformGrid Columns="2" Rows="4" Margin="0,3"><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="FCS ID" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsIdText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="사용 가능" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsEnabledText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="구동" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsOperatingText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="연결" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsConnectedText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="레이저" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsLaserText" Text="—" Foreground="#FFB000" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="방위각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsAzText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="고각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsElText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border></UniformGrid><Button Content="카메라 방향 맞추기 · 방향키 조절" Click="CalibrationClick" Margin="3,5"/><Button Content="장비 설정 · 범위 미리보기" Click="EquipmentSettingsClick" Margin="3,5"/><TextBlock x:Name="InstallationPositionsText" Text="실제 설치 위치: ECS 연결 대기 (m)" TextWrapping="Wrap" Margin="3"/><Border BorderBrush="{StaticResource Line}" BorderThickness="1" Background="#07110F" Margin="3,8,3,5"><StackPanel Margin="8">
+      <Border Grid.Column="4" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="8"><TextBlock Text="FCS" Foreground="{StaticResource Green}" FontSize="15" FontWeight="Bold"/><ComboBox x:Name="FcsSelector" Margin="0,5,0,4" DisplayMemberPath="DisplayName" SelectionChanged="FcsSelectionChanged"/><UniformGrid Columns="2" Rows="4" Margin="0,3"><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="FCS ID" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsIdText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="사용 가능" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsEnabledText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="구동" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsOperatingText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="연결" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsConnectedText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="레이저" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsLaserText" Text="—" Foreground="#FFB000" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="방위각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsAzText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="고각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsElText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border></UniformGrid><Button Content="카메라 방향 맞추기 · 방향키 조절" Click="CalibrationClick" Margin="3,5"/><Button Content="장비 설정" Click="EquipmentSettingsClick" Margin="3,5"/><TextBlock x:Name="InstallationPositionsText" Text="실제 설치 위치: ECS 연결 대기 (m)" TextWrapping="Wrap" Margin="3"/><Border BorderBrush="{StaticResource Line}" BorderThickness="1" Background="#07110F" Margin="3,8,3,5"><StackPanel Margin="8">
 <TextBlock Text="FCS 각도 보정 (°)" Foreground="{StaticResource Green}" FontWeight="Bold" Margin="0,0,0,6"/>
 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
 <StackPanel Margin="0,0,4,0"><TextBlock Text="팬 · 오른쪽 +" FontSize="11"/><TextBox x:Name="FcsPanOffsetInput" TextChanged="FcsAngleTextChanged" ToolTip="팬 보정 −180~180°"/></StackPanel>

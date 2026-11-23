@@ -1,5 +1,7 @@
 # GUI (WPF)
 
+카메라 보정의 수동 수집·검증 자동조준·적용 단계는 [카메라 보정 운용 흐름](docs/camera-calibration-auto-aim.md)을 참고하세요.
+
 ## 공유 메모리 프레임 수신
 
 WPF는 C++ `Frame`을 named shared memory에서 읽습니다. `ControlStationMock` 송신 프로그램과 동일하게 매핑 이름 `Local\ControlStationMock.SharedMemory.v3`, 뮤텍스 이름 `Local\ControlStationMock.SharedMemory.Mutex.v3`를 사용합니다. 다른 이름을 쓸 때는 `AADC9_SHARED_MEMORY_NAME`과 `AADC9_SHARED_MEMORY_MUTEX_NAME` 환경 변수를 지정합니다.

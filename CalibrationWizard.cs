@@ -46,7 +46,17 @@ internal sealed class CalibrationWindow : Window
     private DateTimeOffset feedbackAt;
 
     private static TextBlock Text(string text,double size=14)=>new() { Text=text,FontSize=size,TextWrapping=TextWrapping.Wrap,Foreground=Brushes.WhiteSmoke,Margin=new Thickness(0,4,0,6) };
-    private float[] Installation()=>data.RdrAssets.SelectMany(a=>new[]{a.PositionX,a.PositionY,a.PositionZ}).Concat(data.FcsAssets.SelectMany(a=>new[]{a.PositionX,a.PositionY,a.PositionZ})).ToArray();
+    private float[] Installation()
+    {
+        var rdr=data.RdrAssets.FirstOrDefault();var fcs=data.FcsAssets.FirstOrDefault();
+        return new[]{rdr?.PositionX??0,rdr?.PositionY??0,rdr?.PositionZ??0,
+            fcs?.PositionX??0,fcs?.PositionY??0,fcs?.PositionZ??0};
+    }
+    private (double X,double Y,double Z) RdrLocal(double x,double y,double z)
+    {
+        var rdr=data.RdrAssets.FirstOrDefault();
+        return (x-(rdr?.PositionX??0),y-(rdr?.PositionY??0),z-(rdr?.PositionZ??0));
+    }
     internal CalibrationWindow(DashboardData data,Func<bool> live,Func<CommandType,uint,float,float,Task<PipeResponse>> send,float[] original,string? storagePath=null,GeometryCalibration? originalGeometry=null,Func<GeometryCalibration,Task>? saveGeometry=null)
     {
         this.originalGeometry=originalGeometry??GeometryCalibration.Identity;
@@ -58,7 +68,7 @@ internal sealed class CalibrationWindow : Window
         FontFamily=new FontFamily("Malgun Gothic");Focusable=true;
         var root=new StackPanel { Margin=new Thickness(24),Background=Background };
         Content=new ScrollViewer { Content=root,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
-        root.Children.Add(Text("카메라 방향 맞추기",28));root.Children.Add(Text("객체를 고르고, 화면 중심에 맞춘 뒤 저장하세요. 나머지는 프로그램이 계산합니다.",14));
+        root.Children.Add(Text("카메라 방향 맞추기",28));root.Children.Add(Text("객체를 고르고, 화면 중심에 맞춘 뒤 저장하세요. 보정은 RDR 기준 상대좌표로 계산되어 절대 설치 위치가 바뀌어도 유지됩니다.",14));
         root.Children.Add(progress);root.Children.Add(coverage);
         var body=new Grid { Margin=new Thickness(0,12,0,12) };body.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1.1,GridUnitType.Star) });body.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });root.Children.Add(body);
         scene=new TargetScene(data,()=> (targets.SelectedItem as TargetRecord)?.Id) { Height=390,Margin=new Thickness(0,0,20,0) };body.Children.Add(scene);
@@ -93,7 +103,7 @@ internal sealed class CalibrationWindow : Window
         management.Children.Add(Button("시작 전 3D 보정으로 복원",async()=> {Check();await this.saveGeometry(this.originalGeometry);applied=false;status.Text="이 창을 열기 전 3D 보정값으로 복원했습니다. 기존 팬·틸트 미세 조정은 그대로입니다.";}));
         management.Children.Add(Button("3D 보정 끄기",async()=> {Check();await this.saveGeometry(GeometryCalibration.Identity);applied=false;status.Text="3D 보정을 껐습니다. 기존 공식과 팬·틸트 미세 조정만 사용합니다.";}));
         management.Children.Add(Button("지점 더 모으기",()=> {validation.IsChecked=false;review=false;applied=false;reference=null;fit=null;return Task.CompletedTask;}));
-        details.Children.Add(Text("지점은 PC에 자동 저장됩니다. 이전 작업을 이어가려면 새 지점을 저장하기 전에 ‘저장한 작업 이어하기’를 누르세요. 0.1°는 통신 명령의 최소 단위이며 모터 엔코더 1틱과는 다릅니다.",12));
+        details.Children.Add(Text("지점은 RDR 기준 상대좌표로 PC에 자동 저장됩니다. 절대 설치 좌표가 바뀌어도 이어갈 수 있지만, RDR과 카메라의 실제 장착 관계가 바뀌었다면 새 작업을 시작하세요. 0.1°는 통신 명령의 최소 단위이며 모터 엔코더 1틱과는 다릅니다.",12));
         targets.SelectionChanged+=(_,_)=> {if(reference is null)Update();};
         // Changing the increment is part of the same adjustment session.
         // While the combo owns focus, arrow keys navigate choices only.
@@ -124,12 +134,12 @@ internal sealed class CalibrationWindow : Window
     {
         int count=samples.Count(s=>!s.Validation),checks=samples.Count(s=>s.Validation);
         progress.Text=$"① 거리·방향별 수집  →  ② 다른 위치에서 확인  →  ③ 3D 보정 적용     |     수집 {count}/12개 이상 · 확인 {checks}/6개 이상";
-        if(data.FcsAssets.FirstOrDefault() is { } position) {
+        {
             string Range(bool check) {
-                var distances=samples.Where(s=>s.Validation==check).Select(s=>Math.Sqrt(Math.Pow(s.X-position.PositionX,2)+Math.Pow(s.Y-position.PositionY,2)+Math.Pow(s.Z-position.PositionZ,2))).ToArray();
+                var distances=samples.Where(s=>s.Validation==check).Select(s=>Math.Sqrt(s.X*s.X+s.Y*s.Y+s.Z*s.Z)).ToArray();
                 return distances.Length==0?"아직 없음":$"{distances.Min():F2}~{distances.Max():F2} m";
             }
-            coverage.Text=$"FCS 기준 수집 거리: {Range(false)}   |   별도 확인 거리: {Range(true)}";
+            coverage.Text=$"RDR 기준 수집 거리: {Range(false)}   |   별도 확인 거리: {Range(true)}";
         }
         pickPanel.Visibility=!review&&reference is null?Visibility.Visible:Visibility.Collapsed;
         alignPanel.Visibility=!review&&reference is not null?Visibility.Visible:Visibility.Collapsed;
@@ -157,7 +167,7 @@ internal sealed class CalibrationWindow : Window
     }
     private static bool IsDirection(Key key)=>key is Key.Left or Key.Right or Key.Up or Key.Down;
     private void Disarm(){keyboardEnabled=false;inputEpoch++;if(arm is not null)Update();}
-    private void Check(){if(!live())throw new IOException("연결이 끊겼습니다. ECS 연결을 확인한 뒤 다시 시도하세요.");if(!installation.SequenceEqual(Installation()))throw new IOException("설치 위치가 바뀌었습니다. 창을 닫고 새로 시작하세요.");}
+    private void Check(){if(!live())throw new IOException("연결이 끊겼습니다. ECS 연결을 확인한 뒤 다시 시도하세요.");}
     private async Task Run(Func<Task> action,bool disarm=true)
     {
         if(busy||closed)return;if(disarm)Disarm();busy=true;foreach(var b in actions)b.IsEnabled=false;Update();
@@ -222,7 +232,8 @@ internal sealed class CalibrationWindow : Window
     private async Task CaptureReference()
     {
         Check();var t=targets.SelectedItem as TargetRecord??throw new IOException("맞출 객체를 먼저 선택하세요.");if(!t.CanAssign)throw new IOException("현재 보이는 객체를 선택하세요.");
-        var a=Angles(await send(CommandType.CalibrationReference,t.Id,0,0));reference=(t.Id,t.LidarX,t.LidarY,t.LidarZ,a.Pan,a.Tilt,DateTimeOffset.UtcNow);
+        var local=RdrLocal(t.LidarX,t.LidarY,t.LidarZ);
+        var a=Angles(await send(CommandType.CalibrationReference,t.Id,0,0));reference=(t.Id,local.X,local.Y,local.Z,a.Pan,a.Tilt,DateTimeOffset.UtcNow);
         if(validation.IsChecked==true) {
             try { await PreviewValidation(); }
             catch { reference=null;Disarm();throw; }
@@ -233,8 +244,7 @@ internal sealed class CalibrationWindow : Window
     private async Task PreviewValidation()
     {
         var candidate=FitGeometry();var r=reference!.Value;
-        var fcs=data.FcsAssets.First();
-        var goal=candidate.Model.Angles(new[]{r.X-fcs.PositionX,r.Y-fcs.PositionY,r.Z-fcs.PositionZ},original.Select(x=>(double)x).ToArray());
+        var goal=candidate.Model.Angles(new[]{r.X,r.Y,r.Z},original.Select(x=>(double)x).ToArray());
         double pan=(Math.Round(goal.Pan*10,MidpointRounding.AwayFromZero)/10+360)%360;
         double tilt=Math.Round(goal.Tilt*10,MidpointRounding.AwayFromZero)/10;
         if(!double.IsFinite(pan)||!double.IsFinite(tilt)||tilt< -30||tilt>90)throw new IOException("예측 각도가 이동 범위를 벗어났습니다. 다른 객체를 선택하세요.");
@@ -242,7 +252,8 @@ internal sealed class CalibrationWindow : Window
         void Guard() {
             Check();if(closed||epoch!=inputEpoch)throw new IOException("자동 이동을 중단했습니다. 객체를 다시 선택하세요.");
             var t=data.Targets.FirstOrDefault(t=>t.Id==r.Id);
-            if(t is null||!t.CanAssign||Math.Sqrt(Math.Pow(t.LidarX-r.X,2)+Math.Pow(t.LidarY-r.Y,2)+Math.Pow(t.LidarZ-r.Z,2))>.05)
+            var local=t is null?default:RdrLocal(t.LidarX,t.LidarY,t.LidarZ);
+            if(t is null||!t.CanAssign||Math.Sqrt(Math.Pow(local.X-r.X,2)+Math.Pow(local.Y-r.Y,2)+Math.Pow(local.Z-r.Z,2))>.05)
                 throw new IOException("객체가 움직였거나 사라져 자동 이동을 중단했습니다. 다시 선택하세요.");
         }
         var current=await ReadFeedback();
@@ -275,8 +286,9 @@ internal sealed class CalibrationWindow : Window
     {
         Check();var r=reference??throw new IOException("객체를 먼저 선택하세요.");var t=data.Targets.FirstOrDefault(t=>t.Id==r.Id);
         if(t is null||!t.CanAssign||DateTimeOffset.UtcNow-r.Time>TimeSpan.FromMinutes(5))throw new IOException("객체가 사라졌거나 선택 후 5분이 지났습니다. ‘객체 다시 선택’을 누르세요.");
+        var local=RdrLocal(t.LidarX,t.LidarY,t.LidarZ);
         var now=Angles(await send(CommandType.CalibrationReference,r.Id,0,0));
-        if(Math.Sqrt(Math.Pow(t.LidarX-r.X,2)+Math.Pow(t.LidarY-r.Y,2)+Math.Pow(t.LidarZ-r.Z,2))>.05||Math.Abs(CalibrationMath.Wrap(now.Pan-r.Pan))>.2||Math.Abs(now.Tilt-r.Tilt)>.2)
+        if(Math.Sqrt(Math.Pow(local.X-r.X,2)+Math.Pow(local.Y-r.Y,2)+Math.Pow(local.Z-r.Z,2))>.05||Math.Abs(CalibrationMath.Wrap(now.Pan-r.Pan))>.2||Math.Abs(now.Tilt-r.Tilt)>.2)
             throw new IOException("선택한 객체가 움직였습니다. ‘객체 다시 선택’을 누르고 다시 맞춰주세요.");
         var actual=await ReadFeedback();var s=new CalibrationSample(DateTimeOffset.UtcNow,r.Id,r.X,r.Y,r.Z,r.Pan,r.Tilt,actual.Pan,actual.Tilt,validation.IsChecked==true);
         samples.Add(s);fit=null;try{Persist();}catch{samples.Remove(s);throw;}reference=null;Disarm();
@@ -294,15 +306,22 @@ internal sealed class CalibrationWindow : Window
     }
     private GeometryFit FitGeometry()
     {
-        var fcs=data.FcsAssets.FirstOrDefault()??throw new IOException("FCS 설치 위치가 없습니다.");
-        return GeometrySolver.Fit(samples,new[]{(double)fcs.PositionX,fcs.PositionY,fcs.PositionZ},original.Select(x=>(double)x).ToArray());
+        return GeometrySolver.Fit(samples,new double[3],original.Select(x=>(double)x).ToArray());
     }
     private Task LoadSamples()
     {
         var archive=JsonSerializer.Deserialize<CalibrationArchive>(File.ReadAllText(path))??throw new IOException("저장된 작업이 없습니다.");
-        if(archive.Version is not (1 or 2)||!archive.Installation.SequenceEqual(installation))throw new IOException("설치 위치가 달라 이전 작업을 사용할 수 없습니다.");
-        samples.Clear();foreach(var s in archive.Samples)samples.Add(s);fit=null;reference=null;review=false;applied=false;validation.IsChecked=samples.Any(s=>s.Validation);
-        if(samples.Count(s=>!s.Validation)>=GeometrySolver.MinimumTraining&&samples.Count(s=>s.Validation)>=GeometrySolver.MinimumValidation)Calculate();else status.Text=validation.IsChecked==true?$"{samples.Count}개 지점을 그대로 불러왔습니다. 새 객체를 선택해 보정 각도로 이동하고 확인을 이어가세요.":$"{samples.Count}개 지점을 불러왔습니다. 3D 모델에 필요한 위치를 추가로 모아주세요.";return Task.CompletedTask;
+        if(archive.Version is not (1 or 2 or 3))throw new IOException("지원하지 않는 이전 작업 형식입니다.");
+        samples.Clear();
+        foreach(var sample in RdrLocalSamples(archive))samples.Add(sample);
+        fit=null;reference=null;review=false;applied=false;validation.IsChecked=samples.Any(s=>s.Validation);
+        if(samples.Count(s=>!s.Validation)>=GeometrySolver.MinimumTraining&&samples.Count(s=>s.Validation)>=GeometrySolver.MinimumValidation)Calculate();else status.Text=validation.IsChecked==true?$"{samples.Count}개 지점을 RDR 상대좌표로 불러왔습니다. 새 객체를 선택해 보정 각도로 이동하고 확인을 이어가세요.":$"{samples.Count}개 지점을 RDR 상대좌표로 불러왔습니다. 3D 모델에 필요한 위치를 추가로 모아주세요.";return Task.CompletedTask;
     }
-    private void Persist()=>CalibrationStorage.Save(path,new(2,original,installation,samples.ToList(),originalGeometry));
+    internal static IReadOnlyList<CalibrationSample> RdrLocalSamples(CalibrationArchive archive)
+    {
+        double oldRdrX=archive.Installation.ElementAtOrDefault(0),oldRdrY=archive.Installation.ElementAtOrDefault(1),oldRdrZ=archive.Installation.ElementAtOrDefault(2);
+        return archive.Samples.Select(stored=>archive.Version>=3?stored:
+            stored with {X=stored.X-oldRdrX,Y=stored.Y-oldRdrY,Z=stored.Z-oldRdrZ}).ToArray();
+    }
+    private void Persist()=>CalibrationStorage.Save(path,new(3,original,Installation(),samples.ToList(),originalGeometry));
 }

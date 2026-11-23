@@ -47,7 +47,10 @@ internal enum CommandType : uint
     FireBatchTarget = 1205,
     ResumeBatchScan = 1206,
     RetryBatchTarget = 1207,
-    StopBatchCapture = 1208
+    StopBatchCapture = 1208,
+    StartContinuousPhotos = 1210,
+    GetContinuousPhotoStatus = 1211,
+    StopContinuousPhotos = 1212
 }
 
 /// <summary>Named Pipe 명령 처리 결과</summary>
@@ -114,9 +117,9 @@ internal struct PipeCommand
     public uint RdrId;       // 명령 대상 RDR ID
     public uint FcsId;       // 명령 대상 FCS ID
     public uint TargetId;    // 객체 ID, 미사용은 0; 고각 설정 명령에서는 목표 고각(0~90도)
-    public float PositionX; // 조준 명령(StartManualAim/AimBatchTarget): 목표 방위각(도)
-    public float PositionY; // 조준 명령(StartManualAim/AimBatchTarget): 목표 고각(도)
-    public float PositionZ; // 조준 명령(StartManualAim/AimBatchTarget): 예약값
+    public float PositionX; // 조준 명령: 운용자가 지정한 절대 방위각(도)
+    public float PositionY; // 조준 명령: 운용자가 지정한 절대 고각(도)
+    public float PositionZ; // 조준 명령: 1=운용자 절대각, 0=ECS 자동 계산(영점/3D 보정 포함)
 }
 
 /// <summary>ECS에서 WPF로 돌려주는 40바이트 응답 구조체</summary>

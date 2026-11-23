@@ -29,7 +29,12 @@ public partial class MainWindow
         _cameraReadPending = true;
         try
         {
-            var values = new[] { await ReadCameraGroupAsync(2), await ReadCameraGroupAsync(3), await ReadCameraGroupAsync(4) };
+            var photoSettings = _cameraSettings is { Length: > 3 }
+                ? _cameraSettings[3] : new[] { .05f, 1f, 0f };
+            try { photoSettings = await ReadCameraGroupAsync(5); }
+            catch (IOException) { /* Older ECS keeps the defaults and existing camera settings. */ }
+            var values = new[] { await ReadCameraGroupAsync(2), await ReadCameraGroupAsync(3),
+                await ReadCameraGroupAsync(4), photoSettings };
             _cameraSettings = values;
             DrawRadar();
             _syncingPositionInputs = true;
@@ -90,11 +95,15 @@ public partial class MainWindow
         {
             var ranges = await ReadCameraGroupAsync(2);
             var fov = await ReadCameraGroupAsync(3);
+            var continuousPhotos = _cameraSettings is { Length: > 3 }
+                ? _cameraSettings[3] : new[] { .05f, 1f, 0f };
+            try { continuousPhotos = await ReadCameraGroupAsync(5); }
+            catch (IOException) { /* The settings window remains usable with an older ECS. */ }
             if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset rdr || FcsSelector.SelectedItem is not FcsAsset fcs)
                 throw new IOException("ECS 연결과 설치 위치 정보가 필요합니다.");
             _equipmentWindow = new EquipmentSettingsWindow(this,
                 new[] { rdr.PositionX, rdr.PositionY, rdr.PositionZ },
-                new[] { fcs.PositionX, fcs.PositionY, fcs.PositionZ }, ranges, fov,
+                new[] { fcs.PositionX, fcs.PositionY, fcs.PositionZ }, ranges, fov, continuousPhotos,
                 async (group, values) =>
                 {
                     var response = group < 2
@@ -150,9 +159,10 @@ internal sealed class EquipmentSettingsWindow : Window
     private RangePreview? _preview;
     public double Heading { set { if (_preview != null) { _preview.Heading = value; _preview.InvalidateVisual(); } } }
 
-    internal EquipmentSettingsWindow(Window owner, float[] rdr, float[] fcs, float[] ranges, float[] fov, Func<int, float[], Task> save, double displayScale)
+    internal EquipmentSettingsWindow(Window owner, float[] rdr, float[] fcs, float[] ranges,
+        float[] fov, float[] continuousPhotos, Func<int, float[], Task> save, double displayScale)
     {
-        Title = "장비 설정 · 독립 범위 미리보기";
+        Title = "장비 설정";
         Owner = owner;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         var workArea = SystemParameters.WorkArea;
@@ -185,8 +195,10 @@ internal sealed class EquipmentSettingsWindow : Window
             for (int i = 0; i < labels.Length; i++)
             {
                 var cell = new StackPanel { Width = 170, Margin = new Thickness(0, 0, 8, 0) };
-                cell.Children.Add(new TextBlock { Text = labels[i] + (group >= 3 ? " (°)" : " (m)"), FontSize = 11 });
-                inputs[i] = new TextBox { Text = initial[i].ToString("G9", CultureInfo.CurrentCulture), Padding = new Thickness(4), Foreground = Brushes.Black, Background = Brushes.White };
+                string unit = group == 5 ? i == 0 ? " (cm)" : "" : group >= 3 ? " (°)" : " (m)";
+                cell.Children.Add(new TextBlock { Text = labels[i] + unit, FontSize = 11 });
+                float displayed = group == 5 && i == 0 ? initial[i] * 100 : initial[i];
+                inputs[i] = new TextBox { Text = displayed.ToString("G9", CultureInfo.CurrentCulture), Padding = new Thickness(4), Foreground = Brushes.Black, Background = Brushes.White };
                 cell.Children.Add(inputs[i]); row.Children.Add(cell);
             }
             var button = new Button { Content = "저장", Width = 65, Margin = new Thickness(0, 14, 0, 0) };
@@ -201,15 +213,19 @@ internal sealed class EquipmentSettingsWindow : Window
                 { status.Text = "저장 실패: 거리는 0 이상, RDR 최대 거리는 최소 거리 이상이어야 합니다."; return; }
                 if (group == 3 && (values[0] <= 0 || values[0] > 360 || values[1] <= 0 || values[1] > 180))
                 { status.Text = "저장 실패: 수평은 0° 초과 360° 이하, 수직은 0° 초과 180° 이하입니다."; return; }
+                if (group == 5 && (values[0] <= 0 || values[0] > 100 ||
+                    values[1] < 1 || values[1] > 20 || values[1] != MathF.Truncate(values[1])))
+                { status.Text = "저장 실패: 축별 최대 보정 범위는 0cm 초과 100cm 이하, 단계 수는 1~20의 정수입니다."; return; }
+                float[] stored = group == 5 ? [values[0] / 100, values[1], 0] : values;
                 foreach (var b in buttons) b.IsEnabled = false;
                 status.Text = "ECS에 저장 중…";
                 try
                 {
-                    await save(group, values);
-                    if (group == 0) preview.Rdr = values;
-                    else if (group == 1) preview.Fcs = values;
-                    else if (group == 2) preview.Ranges = values;
-                    else if (group == 3) preview.Fov = values;
+                    await save(group, stored);
+                    if (group == 0) preview.Rdr = stored;
+                    else if (group == 1) preview.Fcs = stored;
+                    else if (group == 2) preview.Ranges = stored;
+                    else if (group == 3) preview.Fov = stored;
                     preview.InvalidateVisual(); status.Text = title + " 저장 완료";
                 }
                 catch (Exception error) { status.Text = "저장 실패 · 기존 저장값 유지: " + error.Message; }
@@ -220,7 +236,9 @@ internal sealed class EquipmentSettingsWindow : Window
         Row("FCS 실제 설치 위치", new[] { "X", "Y", "Z" }, fcs, 1);
         Row("인식·shoot 거리", new[] { "RDR 최소 인식 거리", "RDR 최대 인식 거리", "FCS 최대 shoot 거리" }, ranges, 2);
         Row("RDR 시야각", new[] { "수평", "수직" }, fov, 3);
-        root.Children.Add(status); root.Children.Add(preview);
+        Row("연속 촬영 보정", new[] { "축별 최대 보정 범위", "단계 수" }, continuousPhotos, 5);
+        root.Children.Add(status);
+        root.Children.Add(new Expander { Header = "설치 거리·시야각 도면", Foreground = Foreground, Content = preview });
         root.Children.Add(new TextBlock { Text = "지도와 조준 계산은 실제 설치 위치를 기준으로 합니다.", FontSize = 11, Margin = new Thickness(0, 8, 0, 0) });
     }
 }

@@ -24,7 +24,8 @@ public sealed record GeometryFit(GeometryCalibration Model,double TrainingRms,do
     double Condition,bool CanApply,string Guidance,double[] Errors);
 
 // Six-DOF rigid transform fitted to unit bearings, using damped nonlinear least squares.
-// Parameters: q = Rodrigues(rotation) * (world - configured FCS origin) + translation.
+// Parameters: q = Rodrigues(rotation) * RDR-local point + translation.
+// Absolute map installation coordinates are deliberately outside this model.
 // Translation is normalized by median range during fitting for meaningful conditioning.
 public static class GeometrySolver
 {
