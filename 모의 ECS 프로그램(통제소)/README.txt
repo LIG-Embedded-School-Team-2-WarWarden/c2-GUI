@@ -27,8 +27,8 @@ ControlStationMock.exe
 - reset
 - quit
 
-고각 슬라이더
-- WPF의 라이다 고각 슬라이더(0~90도)는 Named Pipe의 SetRdrElevation 명령으로 모의 ECS에 전송
+고각 설정 프로토콜
+- SetRdrElevation 명령은 프로토콜 호환을 위해 남아 있지만 현재 WPF 화면에서는 노출하거나 전송하지 않음
 - 모의 ECS는 요청을 수신한 뒤 다음 SharedMemory 프레임의 RDRAsset.elevationDeg에 반영
 - 고각 설정 요청에는 RDR ID와 targetId 필드에 0.1도 단위의 정수 값을 사용하며, 파이프 구조체 크기는 바뀌지 않음
 - RDR 고각은 0.1도 단위 목표로 설정되며, 현재값은 최대 초당 25도씩 이동해 공유 메모리에 송신

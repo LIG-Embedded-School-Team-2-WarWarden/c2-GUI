@@ -19,7 +19,6 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _clock = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _commandStatusTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _assignmentBlinkTimer = new() { Interval = TimeSpan.FromMilliseconds(450) };
-    private readonly DispatcherTimer _rdrElevationSendTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly PipeCommandClient _pipeClient = new();
     private readonly Dictionary<uint, uint> _targetFcsSelections = new();
     private readonly Dictionary<uint, (float Azimuth, float Elevation)> _targetAimAngles = new();
@@ -43,10 +42,6 @@ public partial class MainWindow : Window
     private bool _syncingPositionInputs;
     private bool _rdrOperatingCommandPending;
     private bool? _requestedRdrOperating;
-    private bool _updatingRdrElevationSlider;
-    private bool _updatingRdrElevationInput;
-    private bool _rdrElevationInputDirty;
-    private int? _requestedRdrElevationTenths;
     private readonly string _eventLogPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AadcCommandCenter", "event-log.txt");
 
     public MainWindow()
@@ -64,7 +59,7 @@ public partial class MainWindow : Window
         _frameReader.StateChanged += state => Dispatcher.BeginInvoke(() => ApplyConnectionState(state));
         _frameReader.FrameReceived += frame => Dispatcher.BeginInvoke(() => ApplyFrame(frame));
         Loaded += async (_, _) => { UpdateClock(); DrawRadar(); _clock.Start(); _commandStatusTimer.Start(); _assignmentBlinkTimer.Start(); _frameReader.Start(); QueueWorkspaceLayoutRefresh(); await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrStartupAsync(); };
-        Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _assignmentBlinkTimer.Stop(); _rdrElevationSendTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
+        Closed += (_, _) => { _clock.Stop(); _commandStatusTimer.Stop(); _assignmentBlinkTimer.Stop(); _frameReader.Stop(); _frameReader.Dispose(); _pipeClient.Dispose(); };
         _clock.Tick += (_, _) => UpdateClock();
         _assignmentBlinkTimer.Tick += (_, _) =>
         {
@@ -73,11 +68,6 @@ public partial class MainWindow : Window
                 DrawRadar();
         };
         _commandStatusTimer.Tick += async (_, _) => { await RefreshCommandStatusAsync(); await RefreshCameraSettingsAsync(); await RefreshRdrEmissionAsync(); await RefreshRdrStartupAsync(); };
-        _rdrElevationSendTimer.Tick += async (_, _) =>
-        {
-            _rdrElevationSendTimer.Stop();
-            await SendRdrElevationCommandAsync();
-        };
     }
 
     private void ApplyConnectionState(string state)
@@ -99,7 +89,6 @@ public partial class MainWindow : Window
             TargetCountText.Text = $"0 / {SharedMemoryProtocol.TargetCapacity}";
             DrawRadar();
         }
-        UpdateRdrElevationControl(RdrSelector.SelectedItem as RdrAsset);
         UpdateRdrOperatingControl(RdrSelector.SelectedItem as RdrAsset);
         SharedMemoryStatus.Text = state;
         SharedMemoryStatus.Foreground = isLive
@@ -149,7 +138,6 @@ public partial class MainWindow : Window
         RdrSelector.SelectedItem = _data.RdrAssets.FirstOrDefault(x => x.Id == payload.selectedRdrId) ?? _data.RdrAssets.FirstOrDefault();
         FcsSelector.SelectedItem = _data.FcsAssets.FirstOrDefault(x => x.Id == payload.selectedFcsId) ?? _data.FcsAssets.FirstOrDefault();
         RefreshRdrInfo(RdrSelector.SelectedItem as RdrAsset);
-        SyncRdrElevationFromTelemetry(RdrSelector.SelectedItem as RdrAsset);
         RefreshFcsInfo(FcsSelector.SelectedItem as FcsAsset);
         RefreshAssignments();
         TargetCountText.Text = $"{_data.Targets.Count} / {SharedMemoryProtocol.TargetCapacity}";
@@ -267,13 +255,8 @@ public partial class MainWindow : Window
 
     private void RdrSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        _requestedRdrElevationTenths = null;
-        _rdrElevationInputDirty = false;
-        _rdrElevationSendTimer.Stop();
         var rdr = RdrSelector.SelectedItem as RdrAsset;
-        UpdateRdrElevationControl(rdr);
         RefreshRdrInfo(rdr);
-        SyncRdrElevationFromTelemetry(rdr);
     }
 
     private async void RdrOperatingToggleClick(object sender, RoutedEventArgs e)
@@ -396,121 +379,6 @@ public partial class MainWindow : Window
 
     private void RadarCanvasSizeChanged(object sender, SizeChangedEventArgs e) => DrawRadar();
 
-    private void RdrElevationSliderValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
-    {
-        if (_updatingRdrElevationSlider || RdrElevationSliderValue is null) return;
-        var degrees = Math.Clamp((float)Math.Round(e.NewValue, 1), 0f, 90f);
-        RdrElevationSliderValue.Text = $"{degrees:0.0}°";
-        if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset) return;
-        _rdrElevationInputDirty = false;
-        SetRdrElevationInputText(degrees);
-        QueueRdrElevationCommand((int)Math.Round(degrees * 10));
-    }
-
-    private void RdrElevationInputPreviewTextInput(object sender, TextCompositionEventArgs e)
-    {
-        var separator = System.Globalization.CultureInfo.CurrentCulture.NumberFormat.NumberDecimalSeparator;
-        e.Handled = !e.Text.All(c => char.IsDigit(c) || c.ToString() == separator || c == '.' || c == ',');
-    }
-
-    private void RdrElevationInputTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_updatingRdrElevationInput)
-            _rdrElevationInputDirty = true;
-    }
-
-    private void RdrElevationInputApplyClick(object sender, RoutedEventArgs e)
-    {
-        AddLog("라이다 고각 입력 적용 버튼 클릭");
-        if (!float.TryParse(RdrElevationInput.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out var degrees) || !float.IsFinite(degrees) || degrees is < 0 or > 90)
-        {
-            AddLog($"라이다 고각 입력 거부 · 입력값 '{RdrElevationInput.Text}' · 허용 범위 0~90°");
-            ShowAlert("고각은 0.0부터 90.0 사이의 값으로 입력하세요.", "고각 입력 확인");
-            RdrElevationInput.Text = RdrElevationSlider.Value.ToString("0.0");
-            return;
-        }
-
-        degrees = MathF.Round(degrees, 1);
-        _rdrElevationInputDirty = false;
-        SetRdrElevationSlider(degrees);
-        QueueRdrElevationCommand((int)Math.Round(degrees * 10));
-    }
-
-    private void QueueRdrElevationCommand(int degreesTenths)
-    {
-        if (!_isSharedMemoryLive || RdrSelector.SelectedItem is not RdrAsset) return;
-        _requestedRdrElevationTenths = degreesTenths;
-        _rdrElevationSendTimer.Stop();
-        _rdrElevationSendTimer.Start();
-    }
-
-    private void SyncRdrElevationFromTelemetry(RdrAsset? rdr)
-    {
-        if (rdr is null) return;
-        if (_requestedRdrElevationTenths == (int)Math.Round(rdr.ElevationDeg * 10))
-        {
-            _requestedRdrElevationTenths = null;
-        }
-        if (_requestedRdrElevationTenths is int requested)
-        {
-            SetRdrElevationSlider(requested / 10f);
-            return;
-        }
-        SetRdrElevationSlider(Math.Clamp(rdr.ElevationDeg, 0, 90));
-    }
-
-    private void SetRdrElevationSlider(float degrees)
-    {
-        if (RdrElevationSlider is null) return;
-        _updatingRdrElevationSlider = true;
-        RdrElevationSlider.Value = Math.Clamp(degrees, 0, 90);
-        var clampedDegrees = Math.Clamp(degrees, 0f, 90f);
-        RdrElevationSliderValue.Text = $"{clampedDegrees:0.0}°";
-        if (!_rdrElevationInputDirty) SetRdrElevationInputText(clampedDegrees);
-        _updatingRdrElevationSlider = false;
-    }
-
-    private void SetRdrElevationInputText(float degrees)
-    {
-        _updatingRdrElevationInput = true;
-        RdrElevationInput.Text = Math.Clamp(degrees, 0f, 90f).ToString("0.0", System.Globalization.CultureInfo.CurrentCulture);
-        _updatingRdrElevationInput = false;
-    }
-
-    private void UpdateRdrElevationControl(RdrAsset? rdr)
-    {
-        if (RdrElevationSlider is null) return;
-        var isEnabled = _isSharedMemoryLive && rdr is not null && rdr.IsConnected && rdr.IsOperating;
-        RdrElevationSlider.IsEnabled = RdrElevationInput.IsEnabled = RdrElevationApplyButton.IsEnabled = isEnabled;
-    }
-
-    private async Task SendRdrElevationCommandAsync()
-    {
-        if (_requestedRdrElevationTenths is not int degreesTenths || RdrSelector.SelectedItem is not RdrAsset rdr || !_isSharedMemoryLive)
-            return;
-        try
-        {
-            var response = await _pipeClient.SendAsync(CommandType.SetRdrElevation, (uint)degreesTenths, rdr.Id);
-            if ((ResultCode)response.ResultCode != ResultCode.Success)
-                throw new IOException(CommandResultText((ResultCode)response.ResultCode));
-
-            AddLog($"라이다 고각 설정 요청 · {rdr.DisplayName} {degreesTenths / 10f:0.0}°");
-            if ((int)Math.Round(RdrElevationSlider.Value * 10) != degreesTenths)
-                _rdrElevationSendTimer.Start();
-        }
-        catch (Exception ex)
-        {
-            if ((int)Math.Round(RdrElevationSlider.Value * 10) == degreesTenths)
-            {
-                _requestedRdrElevationTenths = null;
-                SyncRdrElevationFromTelemetry(rdr);
-            }
-            else
-                _rdrElevationSendTimer.Start();
-            AddLog($"라이다 고각 설정 실패 · {ex.Message}");
-        }
-    }
-
     private static bool TryCoordinate(string value, out float coordinate) =>
         float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out coordinate) && float.IsFinite(coordinate);
 
@@ -521,7 +389,6 @@ public partial class MainWindow : Window
         UpdateRdrEmissionLine();
         if (!_isSharedMemoryLive || rdr is null)
         {
-            UpdateRdrElevationControl(rdr);
             UpdateRdrOperatingControl(rdr);
             RdrIdText.Text = rdr?.DisplayName ?? "NULL";
             RdrEnabledText.Text = RdrOperatingText.Text = RdrConnectedText.Text = RdrAzText.Text = RdrElText.Text = "NULL";
@@ -533,7 +400,6 @@ public partial class MainWindow : Window
         RdrIdText.Text = rdr.DisplayName;
         RdrEnabledText.Text = YesNo(rdr.IsEnabled); RdrOperatingText.Text = YesNo(rdr.IsOperating); RdrConnectedText.Text = YesNo(rdr.IsConnected);
         RdrAzText.Text = $"{rdr.AzimuthDeg:0.0}°"; RdrElText.Text = $"{rdr.ElevationDeg:0.0}°";
-        UpdateRdrElevationControl(rdr);
         SetRdrValueForeground(new SolidColorBrush(Color.FromRgb(0, 230, 138)));
         if (!rdr.IsEnabled) RdrEnabledText.Foreground = Brushes.Orange;
         RdrOperatingText.Foreground = rdr.IsOperating
