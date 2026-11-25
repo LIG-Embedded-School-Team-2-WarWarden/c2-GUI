@@ -154,7 +154,7 @@
               </StackPanel>
               <TextBlock DockPanel.Dock="Left" Text="객체 할당 정보" Foreground="{StaticResource Green}"
                          FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
-              <Button x:Name="ContinuousPhotoButton" DockPanel.Dock="Left" Content="전체 연속 촬영"
+              <Button x:Name="ContinuousPhotoButton" DockPanel.Dock="Left" Content="전체 연속 촬영" Visibility="Collapsed"
                       Style="{StaticResource AssignmentButtonStyle}" Margin="0,0,8,0" IsEnabled="False"
                       Click="ContinuousPhotoClick" ToolTipService.ShowOnDisabled="True"
                       ToolTip="조사 일시 중지가 확인된 뒤 할당된 모든 객체를 연속 촬영합니다."/>
