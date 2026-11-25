@@ -63,12 +63,12 @@ internal sealed class CalibrationWindow : Window
         this.saveGeometry=saveGeometry??(_=>throw new IOException("3D 보정을 지원하는 ECS가 필요합니다."));
         this.data=data;this.live=live;this.send=send;this.original=original.ToArray();installation=Installation();
         path=storagePath??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"AadcCommandCenter","calibration-session.json");
-        Title="카메라 방향 맞추기 · 캘리브레이션";Width=1080;Height=820;MinWidth=780;MinHeight=600;
+        Title="FCS 방향 맞추기 · 캘리브레이션";Width=1080;Height=820;MinWidth=780;MinHeight=600;
         WindowStartupLocation=WindowStartupLocation.CenterOwner;Background=new SolidColorBrush(Color.FromRgb(11,21,31));Foreground=Brushes.WhiteSmoke;
         FontFamily=new FontFamily("Malgun Gothic");Focusable=true;
         var root=new StackPanel { Margin=new Thickness(24),Background=Background };
         Content=new ScrollViewer { Content=root,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled };
-        root.Children.Add(Text("카메라 방향 맞추기",28));root.Children.Add(Text("객체를 고르고, 화면 중심에 맞춘 뒤 저장하세요. 보정은 RDR 기준 상대좌표로 계산되어 절대 설치 위치가 바뀌어도 유지됩니다.",14));
+        root.Children.Add(Text("FCS 방향 맞추기",28));root.Children.Add(Text("객체를 고르고, 화면 중심에 맞춘 뒤 저장하세요. 보정은 RDR 기준 상대좌표로 계산되어 절대 설치 위치가 바뀌어도 유지됩니다.",14));
         root.Children.Add(progress);root.Children.Add(coverage);
         var body=new Grid { Margin=new Thickness(0,12,0,12) };body.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1.1,GridUnitType.Star) });body.ColumnDefinitions.Add(new ColumnDefinition { Width=new GridLength(1,GridUnitType.Star) });root.Children.Add(body);
         scene=new TargetScene(data,()=> (targets.SelectedItem as TargetRecord)?.Id) { Height=390,Margin=new Thickness(0,0,20,0) };body.Children.Add(scene);
@@ -87,7 +87,7 @@ internal sealed class CalibrationWindow : Window
             var b=new Button { Content=label,FontSize=23,Margin=new Thickness(3),Focusable=false };b.Click+=async(_,_)=>await Nudge(key);arrows.Add(b);Grid.SetRow(b,row);Grid.SetColumn(b,col);arrowGrid.Children.Add(b);
         }
         alignPanel.Children.Add(arrowGrid);alignPanel.Children.Add(feedback);
-        alignPanel.Children.Add(Text("실제 카메라 영상을 보면서 맞추세요. 키보드 방향키와 위 버튼은 같은 동작입니다. 길게 눌러도 한 번만 이동합니다. Esc는 추가 입력을 끕니다.",12));
+        alignPanel.Children.Add(Text("실제 FCS 영상을 보면서 맞추세요. 키보드 방향키와 위 버튼은 같은 동작입니다. 길게 눌러도 한 번만 이동합니다. Esc는 추가 입력을 끕니다.",12));
         reviewPanel.Children.Add(result);
         primary=Button("이 객체 맞추기",Primary);primary.Background=new SolidColorBrush(Color.FromRgb(39,157,128));primary.Foreground=Brushes.White;primary.FontSize=17;primary.FontWeight=FontWeights.Bold;guide.Children.Add(primary);
         verify=Button("다음: 다른 객체로 정확도 확인",()=> { _=FitGeometry();validation.IsChecked=true;reference=null;review=false;Disarm();status.Text="계산에 쓰지 않은 가까운 곳·중간·먼 곳의 객체를 6개 이상 맞춰주세요.";return Task.CompletedTask; });guide.Children.Add(verify);
@@ -103,7 +103,7 @@ internal sealed class CalibrationWindow : Window
         management.Children.Add(Button("시작 전 3D 보정으로 복원",async()=> {Check();await this.saveGeometry(this.originalGeometry);applied=false;status.Text="이 창을 열기 전 3D 보정값으로 복원했습니다. 기존 팬·틸트 미세 조정은 그대로입니다.";}));
         management.Children.Add(Button("3D 보정 끄기",async()=> {Check();await this.saveGeometry(GeometryCalibration.Identity);applied=false;status.Text="3D 보정을 껐습니다. 기존 공식과 팬·틸트 미세 조정만 사용합니다.";}));
         management.Children.Add(Button("지점 더 모으기",()=> {validation.IsChecked=false;review=false;applied=false;reference=null;fit=null;return Task.CompletedTask;}));
-        details.Children.Add(Text("지점은 RDR 기준 상대좌표로 PC에 자동 저장됩니다. 절대 설치 좌표가 바뀌어도 이어갈 수 있지만, RDR과 카메라의 실제 장착 관계가 바뀌었다면 새 작업을 시작하세요. 0.1°는 통신 명령의 최소 단위이며 모터 엔코더 1틱과는 다릅니다.",12));
+        details.Children.Add(Text("지점은 RDR 기준 상대좌표로 PC에 자동 저장됩니다. 절대 설치 좌표가 바뀌어도 이어갈 수 있지만, RDR과 FCS의 실제 장착 관계가 바뀌었다면 새 작업을 시작하세요. 0.1°는 통신 명령의 최소 단위이며 모터 엔코더 1틱과는 다릅니다.",12));
         targets.SelectionChanged+=(_,_)=> {if(reference is null)Update();};
         // Changing the increment is part of the same adjustment session.
         // While the combo owns focus, arrow keys navigate choices only.

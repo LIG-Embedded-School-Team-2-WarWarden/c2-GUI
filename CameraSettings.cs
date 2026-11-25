@@ -17,7 +17,7 @@ public partial class MainWindow
     private async Task<float[]> ReadCameraGroupAsync(uint group)
     {
         var r = await _pipeClient.SendAsync(CommandType.GetCameraSettings, group, 0, 0);
-        if (r.ResultCode != 0) throw new IOException("ECS 카메라 설정을 읽을 수 없습니다.");
+        if (r.ResultCode != 0) throw new IOException("ECS FCS 설정을 읽을 수 없습니다.");
         var values = new[] { BitConverter.UInt32BitsToSingle(r.FcsId), BitConverter.UInt32BitsToSingle(r.AssignedTargetId), BitConverter.UInt32BitsToSingle(r.AssignmentState) };
         if (values.Any(v => !float.IsFinite(v))) throw new IOException("잘못된 ECS 설정 응답입니다.");
         return values;
