@@ -46,10 +46,10 @@
       </Grid></Border>
       <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
       <Grid Grid.Column="2" Margin="0,0,0,0"><Grid.RowDefinitions><RowDefinition Height="34"/><RowDefinition Height="*"/><RowDefinition Height="*" MinHeight="150"/><RowDefinition Height="135"/></Grid.RowDefinitions>
-        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="객체 목록" Foreground="{StaticResource Green}" FontWeight="Bold" Margin="5,0,8,0"/><TextBlock x:Name="TargetCountText" Text="0 / 10" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/></StackPanel></Grid>
+        <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel Orientation="Horizontal" VerticalAlignment="Center"><TextBlock Text="타겟 목록" Foreground="{StaticResource Green}" FontWeight="Bold" Margin="5,0,8,0"/><TextBlock x:Name="TargetCountText" Text="0 / 10" Foreground="{StaticResource Muted}" VerticalAlignment="Center"/></StackPanel></Grid>
         <DataGrid x:Name="TargetGrid" Grid.Row="1" ItemsSource="{Binding Targets}" SelectionChanged="TargetGridSelectionChanged" AutoGenerateColumns="False" CanUserAddRows="False" HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F" BorderBrush="{StaticResource Line}" Foreground="#C3D6CE" RowBackground="#07100F" AlternatingRowBackground="#091411" SelectionMode="Single" IsReadOnly="False">
           <DataGrid.Columns>
-            <DataGridTextColumn Header="객체 ID" Binding="{Binding DisplayName}" IsReadOnly="True" Width="0.9*" MinWidth="76"/><DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" IsReadOnly="True" Width="0.9*" MinWidth="68"/><DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" IsReadOnly="True" Width="0.75*" MinWidth="55"/><DataGridTextColumn Header="거리(m)" Binding="{Binding DistanceText}" IsReadOnly="True" Width="0.9*" MinWidth="68"/>
+            <DataGridTextColumn Header="타겟 ID" Binding="{Binding DisplayName}" IsReadOnly="True" Width="0.9*" MinWidth="76"/><DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" IsReadOnly="True" Width="0.9*" MinWidth="68"/><DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" IsReadOnly="True" Width="0.75*" MinWidth="55"/><DataGridTextColumn Header="거리(m)" Binding="{Binding DistanceText}" IsReadOnly="True" Width="0.9*" MinWidth="68"/>
             <DataGridTextColumn Header="X" Binding="{Binding LidarXText}" IsReadOnly="True" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="Y" Binding="{Binding LidarYText}" IsReadOnly="True" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="Z" Binding="{Binding LidarZText}" IsReadOnly="True" Width="0.7*" MinWidth="48"/><DataGridTextColumn Header="RDR ID" Binding="{Binding RdrId}" IsReadOnly="True" Width="0.8*" MinWidth="58"/><DataGridTextColumn Header="상태" Binding="{Binding StatusText}" IsReadOnly="True" Width="0.9*" MinWidth="110"/>
             <DataGridTemplateColumn Header="FCS" Width="1.15*" MinWidth="95"><DataGridTemplateColumn.CellTemplate><DataTemplate><ComboBox ItemsSource="{Binding DataContext.FcsAssets, RelativeSource={RelativeSource AncestorType=DataGrid}}" DisplayMemberPath="DisplayName" SelectedValuePath="Id" SelectedValue="{Binding SelectedFcsId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/></DataTemplate></DataGridTemplateColumn.CellTemplate></DataGridTemplateColumn>
             <DataGridTemplateColumn Header="할당" Width="1.1*" MinWidth="90">
@@ -151,7 +151,7 @@
                 <Button x:Name="ResumeAssignmentScanButton" Content="조사 재개" Click="ResumeAssignmentScanClick"
                         Style="{StaticResource AssignmentButtonStyle}" IsEnabled="False" Margin="5,0,0,0"/>
               </StackPanel>
-              <TextBlock DockPanel.Dock="Left" Text="객체 할당 정보" Foreground="{StaticResource Green}"
+              <TextBlock DockPanel.Dock="Left" Text="타겟 할당 정보" Foreground="{StaticResource Green}"
                          FontWeight="Bold" Margin="0,0,8,0" VerticalAlignment="Center"/>
               <Button x:Name="ContinuousPhotoButton" DockPanel.Dock="Left" Content="전체 연속 촬영" Visibility="Collapsed"
                       Style="{StaticResource AssignmentButtonStyle}" Margin="0,0,8,0" IsEnabled="False"
@@ -166,7 +166,7 @@
                       HeadersVisibility="Column" GridLinesVisibility="Horizontal" Background="#07100F"
                       RowBackground="#07100F" AlternatingRowBackground="#091411" FontSize="11">
               <DataGrid.Columns>
-                <DataGridTextColumn Header="객체 ID" Binding="{Binding TargetName}" ElementStyle="{StaticResource AssignmentCenteredText}" Width="*" MinWidth="72"/>
+                <DataGridTextColumn Header="타겟 ID" Binding="{Binding TargetName}" ElementStyle="{StaticResource AssignmentCenteredText}" Width="*" MinWidth="72"/>
                 <DataGridTextColumn Header="FCS" Binding="{Binding FcsName}" ElementStyle="{StaticResource AssignmentCenteredText}" Width="*" MinWidth="70"/>
                 <DataGridTextColumn Header="방위각" Binding="{Binding AzimuthText}" ElementStyle="{StaticResource AssignmentCenteredText}" Width="*" MinWidth="58"/>
                 <DataGridTextColumn Header="고각" Binding="{Binding ElevationText}" ElementStyle="{StaticResource AssignmentCenteredText}" Width="*" MinWidth="52"/>

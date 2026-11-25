@@ -211,8 +211,8 @@ public partial class MainWindow
                                 {
                                     case ContinuousPhotoPhase.Completed:
                                         ContinuousPhotoStatus.Text =
-                                            $"완료 · {targets.Length}개 객체 · {confirmed}/{total}장 · FCS 출력 확인";
-                                        AddLog($"전체 연속 촬영 완료 · 객체 {targets.Length}개 · {confirmed}/{total}장");
+                                            $"완료 · {targets.Length}개 타겟 · {confirmed}/{total}장 · FCS 출력 확인";
+                                        AddLog($"전체 연속 촬영 완료 · 타겟 {targets.Length}개 · {confirmed}/{total}장");
                                         authoritativeTerminal = true;
                                         break;
                                     case ContinuousPhotoPhase.Stopped:

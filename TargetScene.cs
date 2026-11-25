@@ -61,7 +61,7 @@ internal sealed class TargetScene : FrameworkElement
             dc.DrawEllipse(color,new Pen(Brushes.White,active?2:1),p,active?7:5,active?7:5);hit.Add((p,t.Id));
             Label($"TGT-{t.Id}"+(active?$"\n({t.LidarX:F2}, {t.LidarY:F2}, {t.LidarZ:F2}) m":""),new(p.X+10,p.Y-12),color);
         }
-        Label($"3D 객체 위치 · 바닥 격자 {step:G3} m",new(12,12),Brushes.WhiteSmoke,15);
-        Label("드래그: 시점 회전  ·  휠: 확대  ·  객체 클릭: 선택",new(12,h-26),Brushes.LightGray);
+        Label($"3D 타겟 위치 · 바닥 격자 {step:G3} m",new(12,12),Brushes.WhiteSmoke,15);
+        Label("드래그: 시점 회전  ·  휠: 확대  ·  타겟 클릭: 선택",new(12,h-26),Brushes.LightGray);
     }
 }
