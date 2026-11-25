@@ -164,10 +164,10 @@ static class Checks
             Check(!restored.Stages[3].CanAdvance && restored.TargetId == 7,
                 "stopping must keep the assignment and wait for confirmed return");
             Manual(restored,"Failed","StatusPending",5);restored.Refresh(null,null);
-            Check(!Equals(actionButton.Content, "촬영 종료") && !actionButton.IsEnabled,
+            Check(!Equals(actionButton.Content, "사격 종료") && !actionButton.IsEnabled,
                 "a failed stop must not look like confirmed capture completion");
             Manual(restored,"FireConfirmed","Success",6);restored.Refresh(null,null);
-            CheckCaptureButton("촬영 종료", false, "#303437");
+            CheckCaptureButton("사격 종료", false, "#303437");
             Check(restored.Stages[3].CanAdvance&&restored.Stages[3].Status=="재개 대기","manual resume unavailable");
             Manual(restored,"TargetStillPresent","Success",8);restored.Refresh(null,null);
             Check(restored.Stages[^1].ActionLabel=="할당 해제"&&restored.Stages[^1].CanAdvance,"missing ID must offer release instead of broken retry");

@@ -38,6 +38,13 @@ public partial class MainWindow : Window
     private string? _previousAssignmentStatusText;
     private uint? _selectedTargetId;
     private double _workspaceZoom = 1.0;
+    private double _mapYawDeg = 45;
+    private double _mapPitchDeg = 35;
+    private double _mapZoom = 1.0;
+    private Point? _mapDragStart;
+    private double _mapDragYawStart;
+    private double _mapDragPitchStart;
+    private bool _mapDragged;
     private bool _workspaceLayoutRefreshQueued;
     private bool _syncingPositionInputs;
     private bool _rdrOperatingCommandPending;
@@ -379,6 +386,56 @@ public partial class MainWindow : Window
 
     private void RadarCanvasSizeChanged(object sender, SizeChangedEventArgs e) => DrawRadar();
 
+    private void RadarCanvasMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is FrameworkElement { Tag: uint }) return;
+        _mapDragStart = e.GetPosition(RadarCanvas);
+        _mapDragYawStart = _mapYawDeg;
+        _mapDragPitchStart = _mapPitchDeg;
+        _mapDragged = false;
+        RadarCanvas.CaptureMouse();
+        RadarCanvas.Cursor = Cursors.SizeAll;
+    }
+
+    private void RadarCanvasMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_mapDragStart is not Point start || e.LeftButton != MouseButtonState.Pressed) return;
+        var current = e.GetPosition(RadarCanvas);
+        var delta = current - start;
+        if (!_mapDragged && delta.Length < 3) return;
+        _mapDragged = true;
+        _mapYawDeg = (_mapDragYawStart - delta.X * .45 + 360) % 360;
+        _mapPitchDeg = Math.Clamp(_mapDragPitchStart + delta.Y * .3, 8, 82);
+        DrawRadar();
+        e.Handled = true;
+    }
+
+    private void RadarCanvasMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_mapDragStart is null) return;
+        RadarCanvas.ReleaseMouseCapture();
+        RadarCanvas.Cursor = Cursors.Hand;
+        _mapDragStart = null;
+        if (_mapDragged) e.Handled = true;
+        _mapDragged = false;
+    }
+
+    private void RadarCanvasMouseLeave(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton == MouseButtonState.Pressed) return;
+        RadarCanvas.ReleaseMouseCapture();
+        RadarCanvas.Cursor = Cursors.Hand;
+        _mapDragStart = null;
+        _mapDragged = false;
+    }
+
+    private void RadarCanvasMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        _mapZoom = Math.Clamp(_mapZoom * (e.Delta > 0 ? 1.12 : 1 / 1.12), .65, 2.4);
+        DrawRadar();
+        e.Handled = true;
+    }
+
     private static bool TryCoordinate(string value, out float coordinate) =>
         float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out coordinate) && float.IsFinite(coordinate);
 
@@ -460,12 +517,16 @@ public partial class MainWindow : Window
         var targets = _data.Targets.Where(x => (x.Valid != 0 || x.IsObservationWaiting) && x.RdrId == rdr.Id).ToArray();
         var rdrX = (double)rdr.PositionX;
         var rdrY = (double)rdr.PositionY;
+        var rdrZ = (double)rdr.PositionZ;
         var fcsX = fcs == null ? rdrX : (double)fcs.PositionX;
         var fcsY = fcs == null ? rdrY : (double)fcs.PositionY;
+        var fcsZ = fcs == null ? rdrZ : (double)fcs.PositionZ;
         double minX = new[] { rdrX, fcsX }.Concat(targets.Select(x => (double)x.LidarX)).Min();
         double maxX = new[] { rdrX, fcsX }.Concat(targets.Select(x => (double)x.LidarX)).Max();
         double minY = new[] { rdrY, fcsY }.Concat(targets.Select(x => (double)x.LidarY)).Min();
         double maxY = new[] { rdrY, fcsY }.Concat(targets.Select(x => (double)x.LidarY)).Max();
+        double minZ = new[] { 0d, rdrZ, fcsZ }.Concat(targets.Select(x => (double)x.LidarZ)).Min();
+        double maxZ = new[] { 0d, rdrZ, fcsZ }.Concat(targets.Select(x => (double)x.LidarZ)).Max();
         var ranges = _cameraSettings?[0];
         var fov = _cameraSettings is { Length: > 1 } ? _cameraSettings[1] : null;
         if (ranges != null)
@@ -483,13 +544,50 @@ public partial class MainWindow : Window
         minX -= padding; maxX += padding; minY -= padding; maxY += padding;
         var canvasWidth = RadarCanvas.ActualWidth > 20 ? RadarCanvas.ActualWidth : double.IsFinite(RadarCanvas.Width) ? RadarCanvas.Width : 260;
         var canvasHeight = RadarCanvas.ActualHeight > 20 ? RadarCanvas.ActualHeight : double.IsFinite(RadarCanvas.Height) ? RadarCanvas.Height : 280;
-        const double inset = 18;
-        var scale = Math.Min((canvasWidth - inset * 2) / (maxX - minX), (canvasHeight - inset * 2) / (maxY - minY));
-        var originX = (canvasWidth - (maxX - minX) * scale) / 2;
-        var originY = (canvasHeight - (maxY - minY) * scale) / 2;
-        Point Map(double x, double y) => new(originX + (x - minX) * scale, canvasHeight - originY - (y - minY) * scale);
+        const double inset = 24;
+        var yaw = _mapYawDeg * Math.PI / 180;
+        var pitch = _mapPitchDeg * Math.PI / 180;
+        var cosYaw = Math.Cos(yaw);
+        var sinYaw = Math.Sin(yaw);
+        var cosPitch = Math.Cos(pitch);
+        var sinPitch = Math.Sin(pitch);
+        Point Project(double x, double y, double z)
+        {
+            // Display mirror only: world coordinates and aiming calculations stay unchanged.
+            var horizontal = -(x * cosYaw - y * sinYaw);
+            var depth = x * sinYaw + y * cosYaw;
+            return new Point(horizontal, depth * sinPitch - z * cosPitch);
+        }
+        var projectedBounds = (from x in new[] { minX, maxX }
+                               from y in new[] { minY, maxY }
+                               from z in new[] { minZ, maxZ }
+                               select Project(x, y, z)).ToArray();
+        var projectedMinX = projectedBounds.Min(p => p.X);
+        var projectedMaxX = projectedBounds.Max(p => p.X);
+        var projectedMinY = projectedBounds.Min(p => p.Y);
+        var projectedMaxY = projectedBounds.Max(p => p.Y);
+        var projectedWidth = Math.Max(projectedMaxX - projectedMinX, 1);
+        var projectedHeight = Math.Max(projectedMaxY - projectedMinY, 1);
+        var scale = Math.Min((canvasWidth - inset * 2) / projectedWidth, (canvasHeight - inset * 2) / projectedHeight) * _mapZoom;
+        var originX = (canvasWidth - projectedWidth * scale) / 2;
+        var originY = (canvasHeight - projectedHeight * scale) / 2;
+        Point Map(double x, double y, double z = 0)
+        {
+            var p = Project(x, y, z);
+            return new Point(originX + (p.X - projectedMinX) * scale, originY + (p.Y - projectedMinY) * scale);
+        }
+        var groundXAxis = new Vector(-cosYaw, sinYaw * sinPitch);
+        var groundYAxis = new Vector(sinYaw, cosYaw * sinPitch);
 
         var gridBrush = new SolidColorBrush(Color.FromRgb(22, 55, 46));
+        RadarCanvas.Children.Add(new Polygon
+        {
+            Fill = new SolidColorBrush(Color.FromRgb(8, 25, 21)),
+            Stroke = new SolidColorBrush(Color.FromRgb(38, 83, 69)),
+            StrokeThickness = 1,
+            IsHitTestVisible = false,
+            Points = new PointCollection { Map(minX, minY), Map(maxX, minY), Map(maxX, maxY), Map(minX, maxY) }
+        });
         var rawStep = span / 8;
         var magnitude = Math.Pow(10, Math.Floor(Math.Log10(rawStep)));
         var gridStep = (rawStep / magnitude <= 2 ? 2 : rawStep / magnitude <= 5 ? 5 : 10) * magnitude;
@@ -505,7 +603,7 @@ public partial class MainWindow : Window
         }
 
         // Read-only overlay: distances from ECS; optical FOV from the XT-M60 specification.
-        var rdrPoint = Map(rdrX, rdrY);
+        var rdrPoint = Map(rdrX, rdrY, rdrZ);
         var rdrDisplayAzimuth = Math.Clamp(rdr.AzimuthDeg, 0, 270) - 135d;
         var viewRadius = ranges != null ? ranges[1] * scale : Math.Min(canvasWidth, canvasHeight) * .3;
         if (ranges != null)
@@ -513,34 +611,41 @@ public partial class MainWindow : Window
             var overlay = new CameraMapOverlay
             {
                 Width = canvasWidth, Height = canvasHeight, RdrCenter = rdrPoint,
-                FcsCenter = fcs == null ? null : Map(fcsX, fcsY),
+                FcsCenter = fcs == null ? null : Map(fcsX, fcsY, fcsZ),
                 MinimumRadius = ranges[0] * scale, MaximumRadius = viewRadius,
                 CaptureRadius = ranges[2] * scale, Heading = rdrDisplayAzimuth,
-                IsHitTestVisible = false, HorizontalFieldOfView = fov?[0] ?? 120
+                IsHitTestVisible = false, HorizontalFieldOfView = fov?[0] ?? 120,
+                GroundXAxis = groundXAxis, GroundYAxis = groundYAxis
             };
             RadarCanvas.Children.Add(overlay);
         }
 
-        var fcsPoint = fcs is null ? (Point?)null : Map(fcsX, fcsY);
+        var fcsPoint = fcs is null ? (Point?)null : Map(fcsX, fcsY, fcsZ);
         var assignedTargetId = fcs is null ? (uint?)null : _data.Assignments.FirstOrDefault(
             row => row.FcsId == fcs.Id && (!row.IsBatch || row.IsFiring))?.TargetId;
         var laserTarget = targets.FirstOrDefault(x => x.Id == assignedTargetId);
         if (fcs?.LaserOn == true && fcsPoint is Point fp && laserTarget is not null)
         {
-            var tp = Map(laserTarget.LidarX, laserTarget.LidarY);
+            var tp = Map(laserTarget.LidarX, laserTarget.LidarY, laserTarget.LidarZ);
             RadarCanvas.Children.Add(new Line { X1 = fp.X, Y1 = fp.Y, X2 = tp.X, Y2 = tp.Y, Stroke = new SolidColorBrush(Color.FromRgb(255, 65, 82)), StrokeThickness = 1.5 });
         }
 
-        AddMapLabel("Y ↑   ·   거리 m", 5, canvasHeight - 17, Color.FromRgb(82, 121, 109));
-        if (fcs is not null) AddAssetMarker(fcsPoint!.Value, "FCS", Color.FromRgb(30, 125, 157), fcsX, fcsY);
-        AddAssetMarker(rdrPoint, "RDR", Color.FromRgb(0, 190, 225), rdrX, rdrY);
+        AddMapLabel($"시점 {_mapYawDeg:0}° / {_mapPitchDeg:0}° · 확대 {_mapZoom:P0}", 5, 5, Color.FromRgb(98, 158, 139), 9);
+        AddMapLabel("X/Y 평면 · Z 고도(m) · 드래그 회전 · 휠 확대", 5, canvasHeight - 17, Color.FromRgb(82, 121, 109));
+        if (fcs is not null)
+        {
+            AddHeightStem(fcsX, fcsY, fcsZ, Color.FromRgb(30, 125, 157));
+            AddAssetMarker(fcsPoint!.Value, "FCS", Color.FromRgb(30, 125, 157), fcsX, fcsY, fcsZ);
+        }
+        AddHeightStem(rdrX, rdrY, rdrZ, Color.FromRgb(0, 190, 225));
+        AddAssetMarker(rdrPoint, "RDR", Color.FromRgb(0, 190, 225), rdrX, rdrY, rdrZ);
 
         if (ranges != null)
         {
-            AddMapLabel($"{ranges[1]:G4} m", rdrPoint.X + 6, rdrPoint.Y - viewRadius - 13, Color.FromRgb(90, 211, 214), 9);
-            var textAngle = rdrDisplayAzimuth * Math.PI / 180;
-            AddMapLabel($"{fov?[0] ?? 120:G4}°", rdrPoint.X + viewRadius * .68 * Math.Sin(textAngle) - 12,
-                rdrPoint.Y - viewRadius * .68 * Math.Cos(textAngle), Color.FromRgb(0, 230, 138), 10);
+            var rangeLabel = CameraMapOverlay.AtProjected(rdrPoint, viewRadius, rdrDisplayAzimuth, groundXAxis, groundYAxis);
+            var fovLabel = CameraMapOverlay.AtProjected(rdrPoint, viewRadius * .68, rdrDisplayAzimuth, groundXAxis, groundYAxis);
+            AddMapLabel($"{ranges[1]:G4} m", rangeLabel.X + 6, rangeLabel.Y - 13, Color.FromRgb(90, 211, 214), 9);
+            AddMapLabel($"{fov?[0] ?? 120:G4}°", fovLabel.X - 12, fovLabel.Y, Color.FromRgb(0, 230, 138), 10);
         }
 
         if (fcs is not null && fcsPoint is Point orientationPoint)
@@ -548,12 +653,14 @@ public partial class MainWindow : Window
             var fcsDisplayAzimuth = fcs.AzimuthDeg - 135d;
             var fcsAngle = fcsDisplayAzimuth * Math.PI / 180d;
             const double directionLength = 24;
+            var direction = groundXAxis * Math.Sin(fcsAngle) + groundYAxis * Math.Cos(fcsAngle);
+            if (direction.LengthSquared > 0) direction.Normalize();
             RadarCanvas.Children.Add(new Line
             {
                 X1 = orientationPoint.X,
                 Y1 = orientationPoint.Y,
-                X2 = orientationPoint.X + directionLength * Math.Sin(fcsAngle),
-                Y2 = orientationPoint.Y - directionLength * Math.Cos(fcsAngle),
+                X2 = orientationPoint.X + directionLength * direction.X,
+                Y2 = orientationPoint.Y + directionLength * direction.Y,
                 Stroke = new SolidColorBrush(Color.FromRgb(0, 162, 255)),
                 StrokeThickness = 2.5,
                 StrokeStartLineCap = PenLineCap.Round,
@@ -565,7 +672,7 @@ public partial class MainWindow : Window
 
         foreach (var target in targets)
         {
-            var point = Map(target.LidarX, target.LidarY);
+            var point = Map(target.LidarX, target.LidarY, target.LidarZ);
             var isSelected = _selectedTargetId == target.Id;
             var color = target.IsAimed ? Color.FromRgb(255, 65, 82)
                 : target.IsAssigned ? Color.FromRgb(255, 190, 35)
@@ -574,6 +681,7 @@ public partial class MainWindow : Window
                 : target.Status == 1 ? Color.FromRgb(110, 120, 120)
                 : target.Status == 2 ? Color.FromRgb(255, 176, 0)
                 : Color.FromRgb(0, 210, 145);
+            AddHeightStem(target.LidarX, target.LidarY, target.LidarZ, color);
             var marker = new Polygon
             {
                 Fill = new SolidColorBrush(color),
@@ -590,20 +698,46 @@ public partial class MainWindow : Window
             marker.Points.Add(new Point(point.X, point.Y - 6)); marker.Points.Add(new Point(point.X - 5, point.Y + 4)); marker.Points.Add(new Point(point.X + 5, point.Y + 4));
             marker.MouseLeftButtonDown += RadarTargetMouseLeftButtonDown;
             RadarCanvas.Children.Add(marker);
-            AddMapLabel(target.DisplayName, point.X + 6, point.Y - 5, color, 8);
+            AddMapLabel($"{target.DisplayName}  Z:{target.LidarZ:0.00}m", point.X + 7, point.Y - 17, color, 8);
         }
 
-        void AddAssetMarker(Point p, string label, Color color, double x, double y)
+        void AddHeightStem(double x, double y, double z, Color color)
         {
-            var marker = new Ellipse { Width = 16, Height = 16, Fill = new SolidColorBrush(color), Stroke = Brushes.White, StrokeThickness = 1, ToolTip = $"{label}  X:{x:0.00}m  Y:{y:0.00}m" };
+            if (Math.Abs(z) < .001) return;
+            var ground = Map(x, y);
+            var elevated = Map(x, y, z);
+            RadarCanvas.Children.Add(new Line
+            {
+                X1 = ground.X, Y1 = ground.Y, X2 = elevated.X, Y2 = elevated.Y,
+                Stroke = new SolidColorBrush(Color.FromArgb(145, color.R, color.G, color.B)),
+                StrokeThickness = 1,
+                StrokeDashArray = new DoubleCollection { 2, 2 },
+                IsHitTestVisible = false
+            });
+        }
+
+        void AddAssetMarker(Point p, string label, Color color, double x, double y, double z)
+        {
+            var marker = new Ellipse { Width = 16, Height = 16, Fill = new SolidColorBrush(color), Stroke = Brushes.White, StrokeThickness = 1, ToolTip = $"{label}  X:{x:0.00}m  Y:{y:0.00}m  Z:{z:0.00}m" };
             Canvas.SetLeft(marker, p.X - 8); Canvas.SetTop(marker, p.Y - 8); RadarCanvas.Children.Add(marker);
-            AddMapLabel(label, p.X + 9, p.Y + 3, color, 9);
+            AddMapLabel($"{label}  Z:{z:0.00}m", p.X + 9, p.Y + 4, color, 9);
         }
 
         void AddMapLabel(string text, double x, double y, Color color, double fontSize = 9)
         {
-            var label = new TextBlock { Text = text, Foreground = new SolidColorBrush(color), FontSize = fontSize, IsHitTestVisible = false };
-            Canvas.SetLeft(label, Math.Clamp(x, 2, Math.Max(2, canvasWidth - 80))); Canvas.SetTop(label, Math.Clamp(y, 2, Math.Max(2, canvasHeight - 16))); RadarCanvas.Children.Add(label);
+            var label = new TextBlock
+            {
+                Text = text,
+                Foreground = new SolidColorBrush(color),
+                Background = new SolidColorBrush(Color.FromArgb(178, 7, 17, 15)),
+                Padding = new Thickness(2, 0, 2, 0),
+                FontSize = fontSize,
+                IsHitTestVisible = false
+            };
+            var estimatedWidth = Math.Min(canvasWidth - 4, text.Length * fontSize * .63 + 6);
+            Canvas.SetLeft(label, Math.Clamp(x, 2, Math.Max(2, canvasWidth - estimatedWidth)));
+            Canvas.SetTop(label, Math.Clamp(y, 2, Math.Max(2, canvasHeight - 16)));
+            RadarCanvas.Children.Add(label);
         }
     }
 
@@ -616,7 +750,7 @@ public partial class MainWindow : Window
         TargetGrid.SelectedItem = target;
         TargetGrid.ScrollIntoView(target);
         DrawRadar();
-        AddLog($"레이더 객체 선택 · {target.DisplayName}");
+        AddLog($"레이더 타겟 선택 · {target.DisplayName}");
         e.Handled = true;
     }
 
@@ -637,35 +771,35 @@ public partial class MainWindow : Window
 
     private async void TargetAssignClick(object sender, RoutedEventArgs e)
     {
-        if (!EnsureSharedMemoryLiveForCommand("객체 할당")) return;
-        if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("객체 할당 거부 · 객체 행을 확인할 수 없음"); return; }
+        if (!EnsureSharedMemoryLiveForCommand("타겟 할당")) return;
+        if ((sender as FrameworkElement)?.DataContext is not TargetRecord target) { AddLog("타겟 할당 거부 · 타겟 행을 확인할 수 없음"); return; }
         if (target.Status == 4 || _data.Assignments.Any(row => row.IsScanPaused))
         {
-            ShowAlert("객체를 할당하려면 먼저 조사를 재개하세요.", "조사 재개 필요");
+            ShowAlert("타겟을 할당하려면 먼저 조사를 재개하세요.", "조사 재개 필요");
             return;
         }
-        AddLog($"객체 할당 버튼 클릭 · {target.DisplayName}");
+        AddLog($"타겟 할당 버튼 클릭 · {target.DisplayName}");
         var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == target.SelectedFcsId);
         if (fcs is null)
         {
-            AddLog($"객체 할당 거부 · {target.DisplayName} FCS 미선택");
-            ShowAlert("FCS을 먼저 선택하세요.", "객체 할당");
+            AddLog($"타겟 할당 거부 · {target.DisplayName} FCS 미선택");
+            ShowAlert("FCS을 먼저 선택하세요.", "타겟 할당");
             return;
         }
         if (!target.CanAssign)
         {
-            AddLog($"객체 할당 거부 · {target.DisplayName} 상태 {target.StatusText}");
-            ShowAlert("생존 상태인 객체만 할당할 수 있습니다.", "객체 할당");
+            AddLog($"타겟 할당 거부 · {target.DisplayName} 상태 {target.StatusText}");
+            ShowAlert("생존 상태인 타겟만 할당할 수 있습니다.", "타겟 할당");
             return;
         }
         if (_pendingFcsAssignments.Contains(fcs.Id))
         {
-            AddLog($"객체 할당 중복 클릭 무시 · {fcs.DisplayName} 연결 시도 중");
+            AddLog($"타겟 할당 중복 클릭 무시 · {fcs.DisplayName} 연결 시도 중");
             return;
         }
         if (_assignmentsByTarget.TryGetValue(target.Id, out var currentAssignment) && currentAssignment.FcsId == fcs.Id && !currentAssignment.CanRetry)
         {
-            AddLog($"객체 할당 거부 · {target.DisplayName}에 {fcs.DisplayName} 이미 할당됨");
+            AddLog($"타겟 할당 거부 · {target.DisplayName}에 {fcs.DisplayName} 이미 할당됨");
             ShowAlert($"{fcs.DisplayName}은(는) 이미 {target.DisplayName}에 할당되어 있습니다.", "중복 할당");
             return;
         }
@@ -673,8 +807,8 @@ public partial class MainWindow : Window
         var rdr = _data.RdrAssets.FirstOrDefault(x => x.Id == target.RdrId);
         if (rdr is null || !rdr.IsConnected || !rdr.IsOperating)
         {
-            AddLog($"객체 할당 거부 · {target.DisplayName} 탐지 레이더 연결/구동 불가");
-            ShowAlert("탐지 레이더의 연결 및 구동 상태를 확인하세요.", "객체 할당");
+            AddLog($"타겟 할당 거부 · {target.DisplayName} 탐지 레이더 연결/구동 불가");
+            ShowAlert("탐지 레이더의 연결 및 구동 상태를 확인하세요.", "타겟 할당");
             return;
         }
 
@@ -691,7 +825,7 @@ public partial class MainWindow : Window
             _assignedTargets.Add(target.Id);
             target.IsAssigned = true;
             RefreshAssignments();
-            AddLog($"객체 할당 목록 등록 · {target.DisplayName} → {fcs.DisplayName} · 처리 대기");
+            AddLog($"타겟 할당 목록 등록 · {target.DisplayName} → {fcs.DisplayName} · 처리 대기");
             return;
         }
         assignment.SetConnecting();
@@ -709,7 +843,7 @@ public partial class MainWindow : Window
                 _supportsBatchAssignments = capability is { ResultCode: (uint)ResultCode.Success };
             }
             var register = _supportsBatchAssignments ? CommandType.RegisterBatchTarget : CommandType.RegisterManualTarget;
-            response = await SendPipeCommandAsync(register, target.RdrId, fcs.Id, target.Id, "객체 할당", showConnectionAlert: false);
+            response = await SendPipeCommandAsync(register, target.RdrId, fcs.Id, target.Id, "타겟 할당", showConnectionAlert: false);
         }
         finally
         {
@@ -724,7 +858,7 @@ public partial class MainWindow : Window
             target.IsAssignmentPending = false;
             if (assignment is not null) _data.Assignments.Remove(assignment);
             RefreshAssignments();
-            AddLog($"{target.DisplayName} 객체 할당 실패 · 연결 불가, 할당 정보 제거");
+            AddLog($"{target.DisplayName} 타겟 할당 실패 · 연결 불가, 할당 정보 제거");
             return;
         }
         ApplyCommandResponse(response.Value);
@@ -739,11 +873,11 @@ public partial class MainWindow : Window
                 RefreshAssignmentEmptyState();
             }
             var message = CommandResultText((ResultCode)response.Value.ResultCode);
-            AddLog($"객체 할당 거부 · {target.DisplayName} · {message}");
-            ShowAlert(message, "객체 할당 거부");
+            AddLog($"타겟 할당 거부 · {target.DisplayName} · {message}");
+            ShowAlert(message, "타겟 할당 거부");
             return;
         }
-        AddLog($"객체 할당 명령 접수 · {target.DisplayName} → {fcs.DisplayName} · {AssignmentStateText((AssignmentState)response.Value.AssignmentState)}");
+        AddLog($"타겟 할당 명령 접수 · {target.DisplayName} → {fcs.DisplayName} · {AssignmentStateText((AssignmentState)response.Value.AssignmentState)}");
     }
 
     private async void AssignmentStageClick(object sender, RoutedEventArgs e)
@@ -896,7 +1030,7 @@ public partial class MainWindow : Window
             }
             if (result == ResultCode.Success) AddLog($"{stage.Label} · {assignment.TargetName} → {assignment.FcsName}");
             else if (command == CommandType.PauseBatchScan && result == ResultCode.TargetPending)
-                ShowAlert("배치에 등록된 객체 중 최신 실측이 확인되지 않은 객체가 있습니다. 객체가 다시 관측되면 중지를 다시 누르세요.", stage.Label);
+                ShowAlert("배치에 등록된 타겟 중 최신 실측이 확인되지 않은 타겟이 있습니다. 타겟이 다시 관측되면 중지를 다시 누르세요.", stage.Label);
             else ShowAlert(CommandResultText(result), stage.Label);
         }
         finally
@@ -1068,7 +1202,7 @@ public partial class MainWindow : Window
             ? failed.StateText : AssignmentStateText(state);
         if (_previousAssignmentState != state || _previousAssignmentStatusText != stateText)
         {
-            AddLog($"명령 서버 객체할당 상태 · {stateText} · {TargetName(response.AssignedTargetId)}");
+            AddLog($"명령 서버 타겟 할당 상태 · {stateText} · {TargetName(response.AssignedTargetId)}");
             _previousAssignmentState = state;
             _previousAssignmentStatusText = stateText;
         }
@@ -1093,7 +1227,7 @@ public partial class MainWindow : Window
         AssignmentState.FireConfirmed => "실행 완료",
         AssignmentState.ScanResumed => "조사 재개 완료 · 결과 판정 중",
         AssignmentState.ResultConfirmed => "결과 확인 · HIT",
-        AssignmentState.TargetStillPresent => "결과 확인 · 객체 유지",
+        AssignmentState.TargetStillPresent => "결과 확인 · 타겟 유지",
         _ => "알 수 없음"
     };
 
@@ -1102,14 +1236,14 @@ public partial class MainWindow : Window
         ResultCode.Success => "명령 접수",
         ResultCode.InvalidRequest => "요청 값이 올바르지 않습니다",
         ResultCode.AssetUnavailable => "FCS을 사용할 수 없습니다",
-        ResultCode.NotAssigned => "FCS에 할당된 객체가 없습니다",
-        ResultCode.AlreadyAssigned => "ECS에 이미 할당된 객체가 있습니다. 진행 중인 할당 정보를 확인하세요",
+        ResultCode.NotAssigned => "FCS에 할당된 타겟이 없습니다",
+        ResultCode.AlreadyAssigned => "ECS에 이미 할당된 타겟이 있습니다. 진행 중인 할당 정보를 확인하세요",
         ResultCode.NotSupported => "지원하지 않는 명령입니다",
         ResultCode.DeviceError => "장치 처리 오류입니다",
         ResultCode.ResultUnconfirmed => "동일 ID의 재관측을 3초 안에 확인하지 못했습니다",
         ResultCode.PauseTimeout => "실행 완료 전 조사 중지 제한 시간(10초)을 초과했습니다",
         ResultCode.StatusPending => "장치 상태 갱신을 기다리는 중입니다",
-        ResultCode.TargetPending => "기존 대상의 최신 관측을 확인할 수 없습니다. 할당을 해제한 뒤 현재 객체 목록에서 대상을 다시 선택하세요.",
+        ResultCode.TargetPending => "기존 대상의 최신 관측을 확인할 수 없습니다. 할당을 해제한 뒤 현재 타겟 목록에서 대상을 다시 선택하세요.",
         ResultCode.DeviceFault => "장치가 준비되지 않았습니다",
         ResultCode.LidarUnsupported => "RDR 펌웨어가 라이다 방출 제어를 지원하지 않습니다. ED07/DE07 지원 버전으로 업데이트해 주세요",
         ResultCode.LidarUnknown => "RDR의 실제 라이다 방출 상태가 확인되지 않았습니다",
@@ -1344,15 +1478,15 @@ public sealed class AssignmentView : INotifyPropertyChanged
         _commandState is AssignmentState.ScanPaused or AssignmentState.Firing or AssignmentState.StoppingCapture or AssignmentState.FireConfirmed;
     public AssignmentStage PrimaryAction => _commandState switch
     {
-        _ when AwaitingEcsSlot => Stages[0] with { ActionLabel = "처리 시작" },
+        _ when AwaitingEcsSlot => Stages[0] with { ActionLabel = "사격" },
         AssignmentState.TargetStillPresent when Stages[4].ActionLabel == "다시 시도" => Stages[4],
         AssignmentState.Confirmed when IsBatch && !IsScanPaused =>
-            Stages[0] with { ActionLabel = "조사 일시 정지 필요", CanAdvance = false },
+            Stages[0] with { ActionLabel = "LIDAR 정지 필요", CanAdvance = false },
         AssignmentState.Firing when _pendingStageCommand is CommandType.StopManualCapture or CommandType.StopBatchCapture =>
             Stages[2] with { ActionLabel = "중지 확인 중", CanAdvance = false, Command = null },
         AssignmentState.Firing or AssignmentState.StoppingCapture => Stages[2],
         AssignmentState.FireConfirmed or AssignmentState.ScanResumed or AssignmentState.ResultConfirmed or AssignmentState.TargetStillPresent =>
-            Stages[2] with { ActionLabel = "촬영 종료", CanAdvance = false, Command = null },
+            Stages[2] with { ActionLabel = "사격 종료", CanAdvance = false, Command = null },
         _ when ManualCompletedStep >= 3 && _commandState != AssignmentState.Failed => Stages[2] with { ActionLabel = "실행" },
         _ => Stages[0] with { ActionLabel = "조준" }
     };
@@ -1504,7 +1638,7 @@ public sealed class AssignmentView : INotifyPropertyChanged
         if (AwaitingEcsSlot)
         {
             var waitingStages = StageLabels.Select(label => new AssignmentStage(label, "대기")).ToArray();
-            waitingStages[0] = new AssignmentStage("처리 시작", "대기", ActionLabel: "처리 시작",
+            waitingStages[0] = new AssignmentStage("처리 시작", "대기", ActionLabel: "사격",
                 CanAdvance: EcsSlotAvailable && target?.CanAssign == true) { Command = CommandType.RegisterManualTarget };
             UpdateStages(waitingStages);
             return;
@@ -1792,7 +1926,7 @@ internal sealed class TargetAngleEditorWindow : Window
         root.Children.Add(new TextBlock { Text = "FCS 조준 목표각 (°)", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 9) });
         AddAngleRow(root, "방위각", _azimuthInput, 1);
         AddAngleRow(root, "고각", _elevationInput, 2);
-        var help = new TextBlock { Text = "적용하면 이 객체만 운용자 수동값으로 조준합니다. 자동 계산으로 복원하면 ECS 영점·3D 보정을 다시 사용합니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 7, 0, 0) };
+        var help = new TextBlock { Text = "적용하면 이 타겟만 운용자 수동값으로 조준합니다. 자동 계산으로 복원하면 ECS 영점·3D 보정을 다시 사용합니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 7, 0, 0) };
         Grid.SetRow(help, 3);
         root.Children.Add(help);
 

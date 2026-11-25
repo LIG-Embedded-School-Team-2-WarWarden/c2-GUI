@@ -15,7 +15,7 @@ public sealed record GeometryCalibration(bool Enabled,double[] Translation,doubl
     public (double Pan,double Tilt) Angles(double[] point,double[] offsets)
     {
         var q=Transform(point);double horizontal=Math.Sqrt(q[0]*q[0]+q[1]*q[1]);
-        if(horizontal<.001)throw new InvalidOperationException("객체가 회전축 바로 위/아래에 있어 방향을 정할 수 없습니다.");
+        if(horizontal<.001)throw new InvalidOperationException("타겟이 회전축 바로 위/아래에 있어 방향을 정할 수 없습니다.");
         return ((180+Math.Atan2(q[0],q[1])*180/Math.PI+offsets[0]+720)%360,Math.Atan2(q[2],horizontal)*180/Math.PI+offsets[1]);
     }
 }
@@ -32,7 +32,7 @@ public static class GeometrySolver
     public const int MinimumTraining=12,MinimumValidation=6;
     internal static double Norm(double[] v)=>Math.Sqrt(v.Sum(x=>x*x));
     internal static double[] Cross(double[] a,double[] b)=>new[]{a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};
-    private static double[] Unit(double[] v){double n=Norm(v);if(n<.05||!double.IsFinite(n))throw new InvalidOperationException("회전축에 너무 가까운 객체 또는 잘못된 좌표입니다.");return v.Select(x=>x/n).ToArray();}
+    private static double[] Unit(double[] v){double n=Norm(v);if(n<.05||!double.IsFinite(n))throw new InvalidOperationException("회전축에 너무 가까운 타겟 또는 잘못된 좌표입니다.");return v.Select(x=>x/n).ToArray();}
     private static double[] Bearing(CalibrationSample s,double[] offsets)
     {
         double pan=(s.ActualPan-offsets[0]-180)*Math.PI/180,tilt=(s.ActualTilt-offsets[1])*Math.PI/180;
@@ -57,7 +57,7 @@ public static class GeometrySolver
         int Bin(double d)=>Math.Clamp((int)((d-near)/(far-near)*3),0,2);
         if(far-near<.5||far/Math.Max(near,.05)<1.5)throw new InvalidOperationException("거리 차이가 부족합니다. 가까운 곳과 먼 곳을 더 모아주세요 (최소 0.5 m 차이, 거리 비율 1.5배).");
         if(Enumerable.Range(0,3).Any(i=>ranges.Count(d=>Bin(d)==i)<2))throw new InvalidOperationException("가까운 곳·중간·먼 곳에 각각 2개 이상이 필요합니다.");
-        if(panSpan<20||tiltSpan<8)throw new InvalidOperationException($"방향 분포가 좁습니다 (좌우 {panSpan:F1}°, 높이 {tiltSpan:F1}°). 좌우와 높이가 다른 객체를 더 모아주세요.");
+        if(panSpan<20||tiltSpan<8)throw new InvalidOperationException($"방향 분포가 좁습니다 (좌우 {panSpan:F1}°, 높이 {tiltSpan:F1}°). 좌우와 높이가 다른 타겟을 더 모아주세요.");
         GeometryCalibration Model(double[] p)=>new(true,p.Take(3).Select(x=>x*scale).ToArray(),p.Skip(3).ToArray());
         double[] Residual(double[] p)
         {

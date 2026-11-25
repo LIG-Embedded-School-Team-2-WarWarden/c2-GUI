@@ -42,6 +42,14 @@ internal static class GeometryChecks
         Check(localFit.CanApply&&GeometrySolver.Norm(localFit.Model.Translation.Zip(fit.Model.Translation,(a,b)=>a-b).ToArray())<1e-8&&
             GeometrySolver.Norm(localFit.Model.Rotation.Zip(fit.Model.Rotation,(a,b)=>a-b).ToArray())<1e-8,
             "RDR-local fit changed with absolute installation origin");
+        var legacyArchive=new CalibrationArchive(2,offsets.Select(x=>(float)x).ToArray(),
+            new[]{(float)origin[0],(float)origin[1],(float)origin[2],9f,-4f,2f},samples,GeometryCalibration.Identity);
+        var migrated=CalibrationWindow.RdrLocalSamples(legacyArchive);
+        Check(migrated.Zip(localSamples,(a,b)=>Math.Abs(a.X-b.X)+Math.Abs(a.Y-b.Y)+Math.Abs(a.Z-b.Z)).Max()<1e-6,
+            "version 2 world samples were not migrated to the RDR-local frame");
+        var localArchive=legacyArchive with {Version=3,Samples=localSamples.ToList()};
+        Check(CalibrationWindow.RdrLocalSamples(localArchive).Zip(localSamples,(a,b)=>Math.Abs(a.X-b.X)+Math.Abs(a.Y-b.Y)+Math.Abs(a.Z-b.Z)).Max()<1e-12,
+            "version 3 RDR-local samples were migrated twice");
         var before=fit.Model.Translation.ToArray();
         var corrupt=samples.Select(s=>s.Validation?s with{ActualPan=s.ActualPan+8}:s).ToArray();
         var failed=GeometrySolver.Fit(corrupt,origin,offsets);
@@ -62,18 +70,23 @@ internal static class GeometryChecks
         Check(Math.Abs(CalibrationMath.Wrap(predicted.Pan-remote.ActualPan))<.12&&Math.Abs(predicted.Tilt-remote.ActualTilt)<.12,"physical transform extrapolation regression");
         Directory.CreateDirectory("camera-calibration-check/artifacts");
         File.WriteAllText("camera-calibration-check/artifacts/geometry-fixture.json",JsonSerializer.Serialize(new{fit.Model,Offsets=offsets,Origin=origin,Samples=samples}));
-        var dashboard=new DashboardData();dashboard.FcsAssets.Add(new FcsAsset(1,true,false,true,false,135,0,(float)origin[0],(float)origin[1],(float)origin[2]));
+        var dashboard=new DashboardData();
+        dashboard.RdrAssets.Add(new RdrAsset(1,true,true,true,135,0,(float)origin[0],(float)origin[1],(float)origin[2],120));
+        dashboard.FcsAssets.Add(new FcsAsset(1,true,false,true,false,135,0,(float)origin[0]+2,(float)origin[1]-.5f,(float)origin[2]+.25f));
         var folder=Directory.CreateTempSubdirectory("c2-geometry-ui-");
         GeometryCalibration? applied=null;int trimWrites=0;
         Task<PipeResponse> Send(CommandType command,uint target,float pan,float tilt){if(command==CommandType.SetCameraSettings)trimWrites++;return Task.FromResult(new PipeResponse());}
         var window=new CalibrationWindow(dashboard,()=>true,Send,offsets.Select(x=>(float)x).ToArray(),Path.Combine(folder.FullName,"session.json"),saveGeometry:m=>{applied=m;return Task.CompletedTask;});
         object Field(string name)=>typeof(CalibrationWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(window)!;
         void Invoke(string name)=>typeof(CalibrationWindow).GetMethod(name,BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null);
-        var stored=(ObservableCollection<CalibrationSample>)Field("samples");foreach(var sample in samples)stored.Add(sample);
+        var stored=(ObservableCollection<CalibrationSample>)Field("samples");foreach(var sample in localSamples)stored.Add(sample);
         Invoke("Calculate");Invoke("Update");
         Check(((Button)Field("primary")).IsEnabled,"valid geometry cannot be applied in wizard");
         ((Task)typeof(CalibrationWindow).GetMethod("Primary",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(window,null)!).GetAwaiter().GetResult();
         Check(applied?.Enabled==true&&trimWrites==0,"geometry apply overwrote manual trim");
+        Check(GeometrySolver.Norm(applied!.Translation.Zip(localFit.Model.Translation,(a,b)=>a-b).ToArray())<1e-8&&
+            GeometrySolver.Norm(applied.Rotation.Zip(localFit.Model.Rotation,(a,b)=>a-b).ToArray())<1e-8,
+            "wizard saved an FCS-origin model instead of the ECS RDR-local contract");
         var history=Directory.GetFiles(Path.Combine(folder.FullName,"calibration-models"));Check(history.Length==1,"applied model history absent");
         var application=JsonSerializer.Deserialize<CalibrationApplication>(File.ReadAllText(history[0]))!;
         Check(application.State=="Applied"&&application.Samples.Count==samples.Count&&application.Fit.CanApply,"applied evidence not preserved");
@@ -98,13 +111,16 @@ internal static class GeometryChecks
         preview=new CalibrationWindow(dashboard,()=>true,PreviewSend,offsets.Select(x=>(float)x).ToArray(),previewPath);
         object PF(string name)=>typeof(CalibrationWindow).GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(preview)!;
         void PC(string name)=>((Task)typeof(CalibrationWindow).GetMethod(name,BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(preview,null)!).GetAwaiter().GetResult();
-        var points=(ObservableCollection<CalibrationSample>)PF("samples");foreach(var sample in samples)points.Add(sample);
-        ((ComboBox)PF("targets")).SelectedItem=dashboard.Targets[0];((CheckBox)PF("validation")).IsChecked=true;
-        PC("CaptureReference");
+        var points=(ObservableCollection<CalibrationSample>)PF("samples");foreach(var sample in localSamples)points.Add(sample);
+        ((ComboBox)PF("targets")).SelectedItem=dashboard.Targets[0];
         var expected=fit.Model.Angles(new[]{probe.X-origin[0],probe.Y-origin[1],probe.Z-origin[2]},offsets);
-        Check(previewMoves>1&&Math.Abs(CalibrationMath.Wrap(mp-expected.Pan))<.06&&Math.Abs(mt-expected.Tilt)<.06,"preview missed corrected angle");
+        ((CheckBox)PF("validation")).IsChecked=false;PC("CaptureReference");
+        Check(previewMoves>1&&Math.Abs(CalibrationMath.Wrap(mp-expected.Pan))<.06&&Math.Abs(mt-expected.Tilt)<.06&&((TextBlock)PF("status")).Text.Contains("현재 보정 계산"),"training coarse aim did not use the current fitted model");
         Check(points.Count==samples.Count&&!File.Exists(previewPath),"preview changed saved observations");
-        Check((bool)PF("keyboardEnabled"),"fine adjustment not enabled after preview");
+        PC("BestEffortLaserOff");typeof(CalibrationWindow).GetField("reference",BindingFlags.Instance|BindingFlags.NonPublic)!.SetValue(preview,null);
+        mp=359;mt=0;int validationMoveStart=previewMoves;((CheckBox)PF("validation")).IsChecked=true;PC("CaptureReference");
+        Check(previewMoves>validationMoveStart+1&&Math.Abs(CalibrationMath.Wrap(mp-expected.Pan))<.06&&Math.Abs(mt-expected.Tilt)<.06,"validation preview missed corrected angle");
+        Check(((List<Button>)PF("arrows")).All(button=>button.IsEnabled),"fine adjustment was not immediately available after preview");
         mp+=.2f;PC("SaveSample");Check(points.Last().Validation&&Math.Abs(points.Last().ActualPan-mp)<.001&&points.Last().BasePan==180,"validation did not preserve measured angle and raw baseline");
         var savedBefore=File.ReadAllText(previewPath);cancelPreview=true;mp=0;int commandsBefore=previewMoves;
         try{PC("CaptureReference");throw new Exception("cancelled preview accepted");}catch(IOException){}

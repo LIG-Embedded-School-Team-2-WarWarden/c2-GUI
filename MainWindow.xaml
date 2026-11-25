@@ -36,9 +36,12 @@
           <TextBlock x:Name="RdrThermalLine" Text="온도 상태 확인 대기" TextWrapping="Wrap" Foreground="Orange" Margin="0,4,0,0" FontWeight="SemiBold" ToolTip="센서 원본 상태: 7 경고, 8 주파수 저하, 9 고온 오류. 실제 섭씨 온도가 아닙니다."/>
         </StackPanel>
         <Grid Grid.Row="3"><Grid.RowDefinitions><RowDefinition Height="*" MinHeight="230"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-          <Canvas x:Name="RadarCanvas" MinHeight="230" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#07110F" ClipToBounds="True" SizeChanged="RadarCanvasSizeChanged"/>
+          <Canvas x:Name="RadarCanvas" MinHeight="230" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#07110F" ClipToBounds="True" Cursor="Hand"
+                  SizeChanged="RadarCanvasSizeChanged" PreviewMouseLeftButtonDown="RadarCanvasMouseLeftButtonDown"
+                  PreviewMouseMove="RadarCanvasMouseMove" PreviewMouseLeftButtonUp="RadarCanvasMouseLeftButtonUp"
+                  MouseLeave="RadarCanvasMouseLeave" PreviewMouseWheel="RadarCanvasMouseWheel"/>
           <Border Grid.Row="1" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="5,6" Background="#0A1413"><StackPanel>
-            <TextBlock Text="점선: FCS 최대 거리 · 주황색 영역: RDR 음영 지역"
+            <TextBlock Text="3D 지도 · 드래그: 시점 회전 · 휠: 확대/축소 · 점선: FCS 최대 거리"
                        FontSize="10" TextWrapping="Wrap" Margin="0,3,0,3"/>
           </StackPanel></Border>
         </Grid>
@@ -58,7 +61,7 @@
                   <Button Click="TargetAssignClick" Padding="5,3" IsEnabled="{Binding CanClickAssign}">
                     <Button.Style>
                       <Style TargetType="Button">
-                        <Setter Property="Content" Value="객체 할당"/>
+                        <Setter Property="Content" Value="타겟 할당"/>
                         <Setter Property="Background" Value="#08251B"/>
                         <Setter Property="Foreground" Value="#00E68A"/>
                         <Setter Property="BorderBrush" Value="#1B5842"/>
@@ -146,9 +149,9 @@
             </Grid.RowDefinitions>
             <DockPanel Margin="8,5">
               <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                <Button x:Name="PauseAssignmentScanButton" Content="조사 일시 중지" Click="PauseAssignmentScanClick"
+                <Button x:Name="PauseAssignmentScanButton" Content="Lidar 적외선 방출 정지" Click="PauseAssignmentScanClick"
                         Style="{StaticResource AssignmentButtonStyle}" IsEnabled="False"/>
-                <Button x:Name="ResumeAssignmentScanButton" Content="조사 재개" Click="ResumeAssignmentScanClick"
+                <Button x:Name="ResumeAssignmentScanButton" Content="Lidar 적외선 방출 재개" Click="ResumeAssignmentScanClick"
                         Style="{StaticResource AssignmentButtonStyle}" IsEnabled="False" Margin="5,0,0,0"/>
               </StackPanel>
               <TextBlock DockPanel.Dock="Left" Text="타겟 할당 정보" Foreground="{StaticResource Green}"
@@ -156,7 +159,7 @@
               <Button x:Name="ContinuousPhotoButton" DockPanel.Dock="Left" Content="전체 연속 촬영" Visibility="Collapsed"
                       Style="{StaticResource AssignmentButtonStyle}" Margin="0,0,8,0" IsEnabled="False"
                       Click="ContinuousPhotoClick" ToolTipService.ShowOnDisabled="True"
-                      ToolTip="조사 일시 중지가 확인된 뒤 할당된 모든 객체를 연속 촬영합니다."/>
+                      ToolTip="조사 일시 중지가 확인된 뒤 할당된 모든 타겟을 연속 촬영합니다."/>
               <TextBlock x:Name="AssignmentScanStatusText" Foreground="#92AFA5" VerticalAlignment="Center"
                          TextTrimming="CharacterEllipsis"/>
             </DockPanel>
@@ -192,7 +195,7 @@
                         <Button.Style>
                           <Style TargetType="Button" BasedOn="{StaticResource AssignmentButtonStyle}">
                             <Style.Triggers>
-                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="조사 일시 정지 필요">
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="LIDAR 정지 필요">
                                 <Setter Property="Background" Value="#493810"/>
                                 <Setter Property="Foreground" Value="#FFE299"/>
                                 <Setter Property="BorderBrush" Value="#B98B2D"/>
@@ -211,7 +214,7 @@
                                 <Setter Property="Foreground" Value="#E1E4E6"/>
                                 <Setter Property="BorderBrush" Value="#686E73"/>
                               </DataTrigger>
-                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="촬영 종료">
+                              <DataTrigger Binding="{Binding PrimaryAction.ActionLabel}" Value="사격 종료">
                                 <Setter Property="Background" Value="#303437"/>
                                 <Setter Property="Foreground" Value="#E1E4E6"/>
                                 <Setter Property="BorderBrush" Value="#686E73"/>
@@ -272,7 +275,7 @@
         <Border Grid.Row="3" Margin="0,6,0,0" BorderBrush="{StaticResource Line}" BorderThickness="1" Background="{StaticResource Panel}"><Grid><Grid.RowDefinitions><RowDefinition Height="28"/><RowDefinition Height="*"/></Grid.RowDefinitions><StackPanel Orientation="Horizontal" Margin="10,3" VerticalAlignment="Center"><TextBlock Text="이벤트 로그" Foreground="{StaticResource Green}" VerticalAlignment="Center"/><Button Content="로그파일 열기" Click="OpenEventLogClick" Margin="8,0,0,0" Width="82" Height="19" Padding="3,0" FontSize="9"/></StackPanel><ListBox x:Name="EventLogList" Grid.Row="1" Background="Transparent" BorderThickness="0" Foreground="#8BB0A1" FontSize="11"/></Grid></Border>
       </Grid>
       <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{StaticResource Line}" ShowsPreview="False" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
-      <Border Grid.Column="4" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="8"><TextBlock Text="FCS" Foreground="{StaticResource Green}" FontSize="15" FontWeight="Bold"/><ComboBox x:Name="FcsSelector" Margin="0,5,0,4" DisplayMemberPath="DisplayName" SelectionChanged="FcsSelectionChanged"/><UniformGrid Columns="2" Rows="4" Margin="0,3"><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="FCS ID" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsIdText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="사용 가능" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsEnabledText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="구동" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsOperatingText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="연결" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsConnectedText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="레이저" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsLaserText" Text="—" Foreground="#FFB000" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="방위각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsAzText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="고각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsElText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border></UniformGrid><Button Content="FCS 방향 맞추기 · 방향키 조절" Click="CalibrationClick" Margin="3,5"/><Button Content="장비 설정" Click="EquipmentSettingsClick" Margin="3,5"/><TextBlock x:Name="InstallationPositionsText" Text="실제 설치 위치: ECS 연결 대기 (m)" TextWrapping="Wrap" Margin="3"/><Border BorderBrush="{StaticResource Line}" BorderThickness="1" Background="#07110F" Margin="3,8,3,5"><StackPanel Margin="8">
+      <Border Grid.Column="4" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1"><ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel Margin="8"><TextBlock Text="FCS" Foreground="{StaticResource Green}" FontSize="15" FontWeight="Bold"/><ComboBox x:Name="FcsSelector" Margin="0,5,0,4" DisplayMemberPath="DisplayName" SelectionChanged="FcsSelectionChanged"/><UniformGrid Columns="2" Rows="4" Margin="0,3"><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="FCS ID" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsIdText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="사용 가능" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsEnabledText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="구동" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsOperatingText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="연결" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsConnectedText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="레이저" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsLaserText" Text="—" Foreground="#FFB000" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="방위각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsAzText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border><Border Style="{StaticResource FieldCard}"><StackPanel><TextBlock Text="고각" Foreground="{StaticResource Muted}"/><TextBlock x:Name="FcsElText" Text="—" Foreground="{StaticResource Green}" FontSize="15"/></StackPanel></Border></UniformGrid><Button Content="FCS 영점 조절" Click="CalibrationClick" Margin="3,5"/><Button Content="장비 설정" Click="EquipmentSettingsClick" Margin="3,5"/><TextBlock x:Name="InstallationPositionsText" Text="실제 설치 위치: ECS 연결 대기 (m)" TextWrapping="Wrap" Margin="3"/><Border BorderBrush="{StaticResource Line}" BorderThickness="1" Background="#07110F" Margin="3,8,3,5"><StackPanel Margin="8">
 <TextBlock Text="FCS 각도 보정 (°)" Foreground="{StaticResource Green}" FontWeight="Bold" Margin="0,0,0,6"/>
 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
 <StackPanel Margin="0,0,4,0"><TextBlock Text="팬 · 오른쪽 +" FontSize="11"/><TextBox x:Name="FcsPanOffsetInput" TextChanged="FcsAngleTextChanged" ToolTip="팬 보정 −180~180°"/></StackPanel>

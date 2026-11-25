@@ -44,6 +44,8 @@ enum class CommandType : std::uint32_t
     ResumeManualScan = 1007,
     ConfirmManualResult = 1008,
     RetryManualAssignment = 1009,
+    CalibrationLaserPulse = 1103,
+    CalibrationLaserOff = 1104,
     GetBatchStatus = 1200,
     RegisterBatchTarget = 1201,
     CancelBatchTarget = 1202,

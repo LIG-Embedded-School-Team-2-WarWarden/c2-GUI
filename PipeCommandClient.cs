@@ -10,6 +10,8 @@ internal enum CommandType : uint
     CalibrationPoint = 1100,
     CalibrationReference = 1101,
     CalibrationFeedback = 1102,
+    CalibrationLaserPulse = 1103,
+    CalibrationLaserOff = 1104,
     ReadGeometryTranslation = 1110,
     ReadGeometryRotation = 1111,
     StageGeometryTranslation = 1112,

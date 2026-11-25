@@ -505,6 +505,8 @@ namespace
         case CommandType::ResumeManualScan: return L"조사 재개";
         case CommandType::ConfirmManualResult: return L"결과 확인";
         case CommandType::RetryManualAssignment: return L"다시 시도";
+        case CommandType::CalibrationLaserPulse: return L"캘리브레이션 레이저 점등";
+        case CommandType::CalibrationLaserOff: return L"캘리브레이션 레이저 소등";
         default: return L"알 수 없는 명령";
         }
     }
@@ -761,7 +763,9 @@ namespace
                  type != CommandType::SetRdrOperating && type != CommandType::GetFcsBusy &&
                  type != CommandType::GetCameraSettings && type != CommandType::SetCameraSettings &&
                  type != CommandType::GetRdrStartupStatus && type != CommandType::GetRdrLidarState &&
-                 type != CommandType::GetRdrSensorHealth && !manualCommand)
+                 type != CommandType::GetRdrSensorHealth &&
+                 type != CommandType::CalibrationLaserPulse && type != CommandType::CalibrationLaserOff &&
+                 !manualCommand)
         {
             result = ResultCode::NotSupported;
         }
@@ -826,6 +830,36 @@ namespace
                 else if (command.rdrId == 1 && command.fcsId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_rdrX=command.positionX; g_rdrY=command.positionY; g_rdrZ=command.positionZ; g_cameraSettings[0] = { g_rdrX, g_rdrY, g_rdrZ }; }
                 else if (command.fcsId == 1 && command.rdrId == 0 && std::isfinite(command.positionX) && std::isfinite(command.positionY) && std::isfinite(command.positionZ)) { g_fcsX=command.positionX; g_fcsY=command.positionY; g_fcsZ=command.positionZ; g_cameraSettings[1] = { g_fcsX, g_fcsY, g_fcsZ }; }
                 else result = ResultCode::InvalidRequest;
+                break;
+
+            case CommandType::CalibrationLaserPulse:
+                if (command.rdrId != 1 || command.fcsId != 1 || command.targetId != 0 ||
+                    command.positionX != 0.0f || command.positionY != 0.0f || command.positionZ != 0.0f)
+                    result = ResultCode::InvalidRequest;
+                else if (!g_connected || !g_available)
+                    result = ResultCode::AssetUnavailable;
+                else if (g_assignment != AssignmentState::Idle || g_targetId != 0 || g_batchActiveTarget != 0 ||
+                    std::any_of(g_batchStates.begin(), g_batchStates.end(),
+                        [](auto state) { return state != AssignmentState::Idle; }))
+                    result = ResultCode::AlreadyAssigned;
+                else
+                {
+                    g_laserOn = true;
+                    g_laserOffAt = now + std::chrono::seconds(5);
+                    Print(L"[캘리브레이션] 레이저 ON (5초 자동 OFF)");
+                }
+                break;
+
+            case CommandType::CalibrationLaserOff:
+                if (command.rdrId != 1 || command.fcsId != 1 || command.targetId != 0 ||
+                    command.positionX != 0.0f || command.positionY != 0.0f || command.positionZ != 0.0f)
+                    result = ResultCode::InvalidRequest;
+                else
+                {
+                    g_laserOn = false;
+                    g_laserOffAt = {};
+                    Print(L"[캘리브레이션] 레이저 OFF");
+                }
                 break;
 
             case CommandType::AssignTarget:

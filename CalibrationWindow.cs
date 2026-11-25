@@ -17,7 +17,7 @@ public partial class MainWindow
         {
             if (!_isSharedMemoryLive || _data.FcsAssets.FirstOrDefault() is not { IsConnected:true })
                 throw new IOException("ECS와 FCS 연결을 확인하세요.");
-            if (_data.Assignments.Any(a => a.HasAssignment)) throw new IOException("객체 할당을 해제한 뒤 캘리브레이션을 시작하세요.");
+            if (_data.Assignments.Any(a => a.HasAssignment)) throw new IOException("타겟 할당을 해제한 뒤 캘리브레이션을 시작하세요.");
             var offsets=await ReadCameraGroupAsync(4);
             uint geometryToken=(uint)Random.Shared.Next(1,int.MaxValue);
             async Task<PipeResponse> GeometryRequest(CommandType type,double[] values)

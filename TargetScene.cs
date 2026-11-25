@@ -25,6 +25,7 @@ internal sealed class TargetScene : FrameworkElement
         LostMouseCapture+=(_,_)=>orbit=false;
         MouseWheel+=(_,e)=> {zoom=Math.Clamp(zoom*(e.Delta>0?1.12:1/1.12),.2,8);InvalidateVisual();};
     }
+    internal static double MirrorDisplayX(double cameraHorizontal)=>-cameraHorizontal;
     protected override void OnRender(DrawingContext dc)
     {
         double w=ActualWidth,h=ActualHeight;if(w<1||h<1)return;
@@ -41,7 +42,8 @@ internal sealed class TargetScene : FrameworkElement
         (Point Screen,double Depth) Project(double x,double y,double z)
         {
             x-=cx;y-=cy;double a=x*Math.Cos(yaw)-y*Math.Sin(yaw),b=x*Math.Sin(yaw)+y*Math.Cos(yaw);
-            return(new(w/2+a*scale,h*.57+(b*Math.Sin(pitch)-z*Math.Cos(pitch))*scale),b*Math.Cos(pitch)+z*Math.Sin(pitch));
+            // Mirror only the rendered horizontal coordinate. Calibration geometry remains untouched.
+            return(new(w/2+MirrorDisplayX(a)*scale,h*.57+(b*Math.Sin(pitch)-z*Math.Cos(pitch))*scale),b*Math.Cos(pitch)+z*Math.Sin(pitch));
         }
         void Label(string text,Point at,Brush color,double size=12)=>dc.DrawText(new FormattedText(text,CultureInfo.CurrentCulture,FlowDirection.LeftToRight,new Typeface("Malgun Gothic"),size,color,VisualTreeHelper.GetDpi(this).PixelsPerDip),at);
         void Line(double x1,double y1,double z1,double x2,double y2,double z2,Brush color,double thickness=1)=>dc.DrawLine(new Pen(color,thickness),Project(x1,y1,z1).Screen,Project(x2,y2,z2).Screen);

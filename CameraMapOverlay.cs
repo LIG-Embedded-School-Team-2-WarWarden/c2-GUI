@@ -16,6 +16,8 @@ internal sealed class CameraMapOverlay : FrameworkElement
     public double MaximumRadius { get; set; }
     public double CaptureRadius { get; set; }
     public double Heading { get; set; }
+    public Vector GroundXAxis { get; set; } = new(1, 0);
+    public Vector GroundYAxis { get; set; } = new(0, -1);
 
     internal static Point At(Point center, double radius, double angle)
     {
@@ -39,25 +41,71 @@ internal sealed class CameraMapOverlay : FrameworkElement
         return shape;
     }
 
+    internal static Point AtProjected(Point center, double radius, double angle, Vector xAxis, Vector yAxis)
+    {
+        var radians = angle * Math.PI / 180;
+        return center + xAxis * (radius * Math.Sin(radians)) + yAxis * (radius * Math.Cos(radians));
+    }
+
+    private static Geometry ProjectedRing(Point center, double radius, Vector xAxis, Vector yAxis)
+    {
+        if (radius <= 0) return Geometry.Empty;
+        const int segments = 72;
+        var shape = new StreamGeometry();
+        using (var context = shape.Open())
+        {
+            context.BeginFigure(AtProjected(center, radius, 0, xAxis, yAxis), true, true);
+            for (var i = 1; i < segments; i++)
+                context.LineTo(AtProjected(center, radius, i * 360d / segments, xAxis, yAxis), true, false);
+        }
+        shape.Freeze();
+        return shape;
+    }
+
+    internal static Geometry ProjectedSector(Point center, double radius, double heading, double horizontalFov,
+        Vector xAxis, Vector yAxis)
+    {
+        if (radius <= 0) return Geometry.Empty;
+        if (horizontalFov >= 360) return ProjectedRing(center, radius, xAxis, yAxis);
+        var segments = Math.Max(8, (int)Math.Ceiling(horizontalFov / 5));
+        var shape = new StreamGeometry();
+        using (var context = shape.Open())
+        {
+            context.BeginFigure(center, true, true);
+            for (var i = 0; i <= segments; i++)
+            {
+                var angle = heading - horizontalFov / 2 + horizontalFov * i / segments;
+                context.LineTo(AtProjected(center, radius, angle, xAxis, yAxis), true, false);
+            }
+        }
+        shape.Freeze();
+        return shape;
+    }
+
     protected override void OnRender(DrawingContext dc) => Draw(dc,
         new Rect(0, 0, ActualWidth, ActualHeight), RdrCenter, FcsCenter,
-        MinimumRadius, MaximumRadius, CaptureRadius, Heading, HorizontalFieldOfView);
+        MinimumRadius, MaximumRadius, CaptureRadius, Heading, HorizontalFieldOfView, GroundXAxis, GroundYAxis);
 
     internal static void Draw(DrawingContext dc, Rect bounds, Point rdr, Point? fcs,
-        double minimum, double maximum, double capture, double heading, double horizontalFov)
+        double minimum, double maximum, double capture, double heading, double horizontalFov,
+        Vector? groundXAxis = null, Vector? groundYAxis = null)
     {
+        var xAxis = groundXAxis ?? new Vector(1, 0);
+        var yAxis = groundYAxis ?? new Vector(0, -1);
         dc.PushClip(new RectangleGeometry(bounds));
         var visible = new CombinedGeometry(GeometryCombineMode.Exclude,
-            Sector(rdr, maximum, heading, horizontalFov), new EllipseGeometry(rdr, minimum, minimum));
+            ProjectedSector(rdr, maximum, heading, horizontalFov, xAxis, yAxis),
+            ProjectedRing(rdr, minimum, xAxis, yAxis));
         dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(36, 0, 230, 138)),
             new Pen(new SolidColorBrush(Color.FromArgb(185, 0, 230, 138)), 1), visible);
-        dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(95, 239, 156, 60)),
-            new Pen(new SolidColorBrush(Color.FromArgb(185, 239, 156, 60)), 1), rdr, minimum, minimum);
+        dc.DrawGeometry(new SolidColorBrush(Color.FromArgb(95, 239, 156, 60)),
+            new Pen(new SolidColorBrush(Color.FromArgb(185, 239, 156, 60)), 1),
+            ProjectedRing(rdr, minimum, xAxis, yAxis));
         var boundary = new Pen(new SolidColorBrush(Color.FromRgb(74, 179, 190)), 1.2) { DashStyle = new DashStyle(new double[] { 4, 3 }, 0) };
         if (fcs is Point fcsCenter)
-            dc.DrawEllipse(null, boundary, fcsCenter, capture, capture);
+            dc.DrawGeometry(null, boundary, ProjectedRing(fcsCenter, capture, xAxis, yAxis));
         dc.DrawLine(new Pen(new SolidColorBrush(Color.FromRgb(0, 230, 138)), 1.5),
-            rdr, At(rdr, maximum, heading));
+            rdr, AtProjected(rdr, maximum, heading, xAxis, yAxis));
         dc.Pop();
     }
 }

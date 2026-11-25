@@ -89,10 +89,10 @@ class Program
         {
             payload = new AadcCommandCenter.SharedPayload
             {
-                rdrCount = 1, fcsCount = 1, selectedRdrId = 1, selectedFcsId = 1,
-                rdrAssets = new[] { new AadcCommandCenter.SharedRdrAsset { rdrId = 1, isEnabled = 1, isConnected = 1, isOperating = 1, azimuthDeg = 135, fieldOfViewDeg = 120 } },
-                fcsAssets = new[] { new AadcCommandCenter.SharedFcsAsset { fcsId = 1, isEnabled = 1, isConnected = 1, positionX = 2, positionY = 1, azimuthDeg = 135 } },
-                targets = new AadcCommandCenter.SharedTarget[10]
+                rdrCount = 1, fcsCount = 1, targetCount = 1, selectedRdrId = 1, selectedFcsId = 1,
+                rdrAssets = new[] { new AadcCommandCenter.SharedRdrAsset { rdrId = 1, isEnabled = 1, isConnected = 1, isOperating = 1, azimuthDeg = 135, fieldOfViewDeg = 120, positionZ = 1 } },
+                fcsAssets = new[] { new AadcCommandCenter.SharedFcsAsset { fcsId = 1, isEnabled = 1, isConnected = 1, positionX = 2, positionY = 1, positionZ = 2, azimuthDeg = 135 } },
+                targets = new[] { new AadcCommandCenter.SharedTarget { targetId = 7, rdrId = 1, valid = 1, lidarX = 4, lidarY = 5, lidarZ = 4, distanceM = 7 } }
             }
         };
         type.GetMethod("ApplyFrame", flags)!.Invoke(main, new object[] { frame });
@@ -107,6 +107,20 @@ class Program
         if (center.X-radius < 0 || center.X+radius > canvas.ActualWidth || center.Y-radius < 0 || center.Y+radius > canvas.ActualHeight)
             throw new Exception("Range ring clipped");
         if (overlay.IsHitTestVisible) throw new Exception("Overlay intercepts object clicks");
+        var xAxis = (Vector)overlayType.GetProperty("GroundXAxis")!.GetValue(overlay)!;
+        var yAxis = (Vector)overlayType.GetProperty("GroundYAxis")!.GetValue(overlay)!;
+        if (xAxis.Y <= 0 || yAxis.Y <= 0 || xAxis.X >= 0 || yAxis.X <= 0)
+            throw new Exception("Main map is not using the horizontally mirrored 3D projection");
+        if (!canvas.Children.OfType<TextBlock>().Any(label => label.Text.Contains("Z 고도")) ||
+            !canvas.Children.OfType<TextBlock>().Any(label => label.Text.Contains("Z:4.00m")))
+            throw new Exception("3D map does not show altitude labels");
+        type.GetField("_mapYawDeg", flags)!.SetValue(main, 110d);
+        type.GetField("_mapPitchDeg", flags)!.SetValue(main, 58d);
+        type.GetMethod("DrawRadar", flags)!.Invoke(main, null);
+        var rotatedOverlay = canvas.Children.OfType<FrameworkElement>().Single(x=>x.GetType().Name == "CameraMapOverlay");
+        var rotatedXAxis = (Vector)overlayType.GetProperty("GroundXAxis")!.GetValue(rotatedOverlay)!;
+        if ((rotatedXAxis - xAxis).Length < .25)
+            throw new Exception("3D camera orbit did not change the map projection");
         var sectorMethod = overlayType.GetMethod("Sector", BindingFlags.NonPublic | BindingFlags.Static)!;
         var sector = (Geometry)sectorMethod.Invoke(null, new object[] { new Point(100,100), 80d, 0d, 120d })!;
         if (!sector.FillContains(new Point(100,50)) || sector.FillContains(new Point(150,100)) || sector.FillContains(new Point(100,150)))
@@ -118,12 +132,15 @@ class Program
             throw new Exception("Retired position correction editor still exists");
         if (main.FindName("FcsPanOffsetInput") == null || main.FindName("FcsTiltOffsetInput") == null)
             throw new Exception("Angular calibration editor missing");
+        type.GetField("_mapYawDeg", flags)!.SetValue(main, 45d);
+        type.GetField("_mapPitchDeg", flags)!.SetValue(main, 35d);
+        type.GetMethod("DrawRadar", flags)!.Invoke(main, null);
         content.UpdateLayout();
         SaveVisual(content, 1480, 820, "artifacts/camera-settings/main-map.png");
         var panel = (FrameworkElement)((FrameworkElement)canvas.Parent).Parent;
         SaveVisual(panel, (int)Math.Ceiling(panel.ActualWidth), (int)Math.Ceiling(panel.ActualHeight), "artifacts/camera-settings/left-map.png");
         main.Close();
-        Console.WriteLine("PASS: actual main map render, range fits, 120 degree sector, heading rotation, click-through overlay");
+        Console.WriteLine("PASS: interactive 3D map orbit, altitude labels, range fits, heading rotation, click-through overlay");
     }
 
     static void SaveVisual(FrameworkElement visual, int width, int height, string path)
