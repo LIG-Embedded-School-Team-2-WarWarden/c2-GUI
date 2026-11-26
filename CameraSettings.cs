@@ -10,9 +10,21 @@ namespace AadcCommandCenter;
 public partial class MainWindow
 {
     private float[][]? _cameraSettings;
+    private GeometryCalibration _geometryCalibration = GeometryCalibration.Identity;
+    private readonly string _fcsAngleOffsetPath =
+        Environment.GetEnvironmentVariable("AADC_FCS_ANGLE_OFFSET_PATH") ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AadcCommandCenter", "fcs-angle-offset.json");
+    private float[]? _fcsAngleOffsets;
     private bool _cameraReadPending;
     private bool _fcsAngleDirty;
     private EquipmentSettingsWindow? _equipmentWindow;
+
+    private float[] GetFcsAngleOffsets() =>
+        (_fcsAngleOffsets ??= FcsAngleOffsetStorage.Load(_fcsAngleOffsetPath)).ToArray();
+
+    private float[] CurrentFcsAngleOffsets() =>
+        _cameraSettings is { Length: > 2 } ? _cameraSettings[2] : GetFcsAngleOffsets();
 
     private async Task<float[]> ReadCameraGroupAsync(uint group)
     {
@@ -23,19 +35,52 @@ public partial class MainWindow
         return values;
     }
 
+    private async Task<GeometryCalibration> ReadGeometryCalibrationAsync()
+    {
+        var token = (uint)Random.Shared.Next(1, int.MaxValue);
+        async Task<PipeResponse> Read(CommandType command)
+        {
+            var response = await _pipeClient.SendAsync(command, token);
+            if ((ResultCode)response.ResultCode != ResultCode.Success)
+                throw new IOException("ECS 3D 보정값을 읽을 수 없습니다.");
+            return response;
+        }
+        static double[] Values(PipeResponse response)
+        {
+            var values = new[] {
+                (double)BitConverter.UInt32BitsToSingle(response.FcsId),
+                BitConverter.UInt32BitsToSingle(response.AssignedTargetId),
+                BitConverter.UInt32BitsToSingle(response.AssignmentState)
+            };
+            if (values.Any(value => !double.IsFinite(value)))
+                throw new IOException("ECS가 잘못된 3D 보정값을 반환했습니다.");
+            return values;
+        }
+
+        var translation = await Read(CommandType.ReadGeometryTranslation);
+        var rotation = await Read(CommandType.ReadGeometryRotation);
+        var rdrAnchor = await Read(CommandType.ReadGeometryRdrAnchor);
+        var fcsAnchor = await Read(CommandType.ReadGeometryFcsAnchor);
+        return new GeometryCalibration(translation.FireState == 1, Values(translation), Values(rotation),
+            Values(rdrAnchor), Values(fcsAnchor));
+    }
+
     private async Task RefreshCameraSettingsAsync()
     {
         if (_cameraReadPending) return;
         _cameraReadPending = true;
         try
         {
+            var fcsAngleOffsets = GetFcsAngleOffsets();
             var photoSettings = _cameraSettings is { Length: > 3 }
                 ? _cameraSettings[3] : new[] { .05f, 1f, 0f };
             try { photoSettings = await ReadCameraGroupAsync(5); }
             catch (IOException) { /* Older ECS keeps the defaults and existing camera settings. */ }
             var values = new[] { await ReadCameraGroupAsync(2), await ReadCameraGroupAsync(3),
-                await ReadCameraGroupAsync(4), photoSettings };
+                fcsAngleOffsets, photoSettings };
             _cameraSettings = values;
+            try { _geometryCalibration = await ReadGeometryCalibrationAsync(); }
+            catch (IOException) { /* 3D 보정을 지원하지 않는 기존 ECS에서는 기존 계산식을 사용합니다. */ }
             DrawRadar();
             _syncingPositionInputs = true;
             if (!_fcsAngleDirty) SetCoordinates(new[] { FcsPanOffsetInput, FcsTiltOffsetInput }, values[2]);
@@ -61,28 +106,24 @@ public partial class MainWindow
         }
     }
 
-    private async void FcsAngleSaveClick(object sender, RoutedEventArgs e)
+    private void FcsAngleSaveClick(object sender, RoutedEventArgs e)
     {
         if (!TryCoordinate(FcsPanOffsetInput.Text, out var pan) ||
             !TryCoordinate(FcsTiltOffsetInput.Text, out var tilt) ||
-            Math.Abs(pan) > 180 || Math.Abs(tilt) > 90) {
+            !FcsAngleOffsetStorage.IsValid(pan, tilt)) {
             FcsAngleStatus.Text = "팬 −180~180°, 틸트 −90~90°의 숫자를 입력하세요.";
-            return;
-        }
-        if (!_isSharedMemoryLive || FcsSelector.SelectedItem is not FcsAsset) {
-            FcsAngleStatus.Text = "저장 실패: ECS와 FCS 연결을 확인하세요.";
             return;
         }
         FcsAngleSaveButton.IsEnabled = FcsPanOffsetInput.IsEnabled = FcsTiltOffsetInput.IsEnabled = false;
         FcsAngleStatus.Text = "저장 중…";
         try {
-            var response = await _pipeClient.SendAsync(CommandType.SetCameraSettings, 4, 0, 0,
-                positionX: pan, positionY: tilt, positionZ: 0);
-            if (response.ResultCode != 0) throw new IOException(CommandResultText((ResultCode)response.ResultCode));
+            FcsAngleOffsetStorage.Save(_fcsAngleOffsetPath, pan, tilt);
+            _fcsAngleOffsets = [pan, tilt, 0f];
+            if (_cameraSettings is { Length: > 2 }) _cameraSettings[2] = _fcsAngleOffsets.ToArray();
             _fcsAngleDirty = false;
-            await RefreshCameraSettingsAsync();
-            FcsAngleStatus.Text = "저장 완료 · 대상을 다시 지정해 조준하세요.";
-            AddLog($"FCS 각도 보정 저장 · 팬={pan:0.###}°, 틸트={tilt:0.###}°");
+            DrawRadar();
+            FcsAngleStatus.Text = "저장 완료 · 다음 조준부터 적용됩니다.";
+            AddLog($"FCS 각도 보정 GUI 저장 · 팬={pan:0.###}°, 틸트={tilt:0.###}°");
         }
         catch (Exception error) { FcsAngleStatus.Text = "저장 실패: " + error.Message; }
         finally { FcsAngleSaveButton.IsEnabled = FcsPanOffsetInput.IsEnabled = FcsTiltOffsetInput.IsEnabled = true; }

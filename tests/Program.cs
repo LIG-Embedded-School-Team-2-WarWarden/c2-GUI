@@ -11,6 +11,9 @@ static class Checks
     static void Check(bool b, string reason) { if (!b) throw new Exception(reason); }
     [STAThread] static void Main()
     {
+        var offsetTestDirectory = Path.Combine(Path.GetTempPath(), "aadc-fcs-offset-ui-" + Guid.NewGuid().ToString("N"));
+        var offsetTestPath = Path.Combine(offsetTestDirectory, "offset.json");
+        Environment.SetEnvironmentVariable("AADC_FCS_ANGLE_OFFSET_PATH", offsetTestPath);
         var app = new Application();
         Check(LidarEmissionStatus.Text(true,null)=="구동 중 / 방출 상태 미확인", "unknown was confused with OFF");
         Check(LidarEmissionStatus.Text(true,false).Contains("OFF 확인"), "confirmed OFF missing");
@@ -28,8 +31,19 @@ static class Checks
                 Convert.ToUInt32(Enum.Parse(commandType, "GetContinuousPhotoStatus")) == 1211 &&
                 Convert.ToUInt32(Enum.Parse(commandType, "StopContinuousPhotos")) == 1212,
                 "continuous photo IPC command contract changed");
+            Check(Convert.ToUInt32(Enum.Parse(commandType, "ReadGeometryRdrAnchor")) == 1115 &&
+                Convert.ToUInt32(Enum.Parse(commandType, "ReadGeometryFcsAnchor")) == 1116,
+                "geometry installation-anchor IPC contract changed");
             CheckContinuousPhotoResponses(commandType);
             CheckTargetAngleEditor();
+            ((TextBox)window.FindName("FcsPanOffsetInput")).Text = "-1";
+            ((TextBox)window.FindName("FcsTiltOffsetInput")).Text = "0";
+            ((Button)window.FindName("FcsAngleSaveButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(((TextBlock)window.FindName("FcsAngleStatus")).Text.Contains("저장 완료"),
+                "FCS zero adjustment still required an ECS settings write");
+            var storedOffset = File.ReadAllText(offsetTestPath);
+            Check(storedOffset.Contains("\"Pan\":-1") && storedOffset.Contains("\"Tilt\":0"),
+                "FCS zero adjustment was not saved by the GUI");
             Check(window.FindName("ContinuousPhotoButton") is Button &&
                 window.FindName("ContinuousPhotoStatus") is TextBlock,
                 "continuous photo controls missing from assignment panel");
@@ -185,7 +199,13 @@ static class Checks
             Check(grid.Items.Count==0,"GUI cached HIT after ECS disconnected");
             Console.WriteLine("PASS: WPF ApplyFrame paused/reacquiring visibility, row continuity, command gates, new ID and ordinary loss");
         }
-        finally { window.Close(); app.Shutdown(); }
+        finally
+        {
+            window.Close();
+            app.Shutdown();
+            Environment.SetEnvironmentVariable("AADC_FCS_ANGLE_OFFSET_PATH", null);
+            if (Directory.Exists(offsetTestDirectory)) Directory.Delete(offsetTestDirectory, true);
+        }
     }
 
     static void CheckContinuousPhotoResponses(Type commandType)
@@ -234,13 +254,51 @@ static class Checks
     static void CheckTargetAngleEditor()
     {
         var type = typeof(MainWindow).Assembly.GetType("AadcCommandCenter.TargetAngleEditorWindow")!;
-        var valid = type.GetMethod("IsValidAngles", BindingFlags.NonPublic | BindingFlags.Static)!;
-        bool Valid(float azimuth, float elevation) => (bool)valid.Invoke(null, new object[] { azimuth, elevation })!;
-        Check(Valid(0, -30) && Valid(359.9f, 90) && !Valid(360, 0) && !Valid(20, -30.1f),
-            "operator angle limits changed");
+        var valid = type.GetMethod("IsValidAdjustments", BindingFlags.NonPublic | BindingFlags.Static)!;
+        bool Valid(float pan, float tilt) => (bool)valid.Invoke(null, new object[] { pan, tilt })!;
+        Check(Valid(-180, -120) && Valid(180, 120) && Valid(0.5f, -0.5f) &&
+            !Valid(-180.1f, 0) && !Valid(0, 120.1f), "operator adjustment limits changed");
+
+        var apply = typeof(MainWindow).GetMethod("ApplyAimAdjustment",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var adjusted = ((float Azimuth, float Elevation))apply.Invoke(null,
+            new object[] { (359f, 10f), (2f, -1.5f) })!;
+        Check(Math.Abs(adjusted.Azimuth - 1f) < .01f && Math.Abs(adjusted.Elevation - 8.5f) < .01f,
+            "aim adjustment was not added to the corrected point");
+
+        var motorToGui = typeof(MainWindow).GetMethod("MotorPanToGuiAzimuth",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        float GuiAzimuth(double motorPan) => (float)motorToGui.Invoke(null, new object[] { motorPan })!;
+        Check(Math.Abs(GuiAzimuth(201.8) - 156.8f) < .01f &&
+            Math.Abs(GuiAzimuth(200.8) - 155.8f) < .01f &&
+            Math.Abs(GuiAzimuth(20) - 335f) < .01f,
+            "FCS motor PAN was not converted to GUI absolute-aim azimuth");
+
+        var hasFcsOffset = typeof(MainWindow).GetMethod("HasFcsAngleOffset",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        Check((bool)hasFcsOffset.Invoke(null, new object[] { new float[] { -1f, 0f, 0f } })! &&
+            !(bool)hasFcsOffset.Invoke(null, new object[] { new float[] { 0f, 0f, 0f } })!,
+            "FCS-only angle correction was not detected");
+
+        var prepare = typeof(MainWindow).GetMethod("PrepareAimCommand",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        var fcsOnly = ((float Azimuth, float Elevation, float Mode))prepare.Invoke(null,
+            new object[] { (155.8f, 19.5f), (0f, 0f), false, true })!;
+        Check(Math.Abs(fcsOnly.Azimuth - 155.8f) < .01f &&
+            Math.Abs(fcsOnly.Elevation - 19.5f) < .01f && fcsOnly.Mode == 1f,
+            "FCS-only correction did not produce an absolute aim command");
+        var automatic = ((float Azimuth, float Elevation, float Mode))prepare.Invoke(null,
+            new object[] { (156.8f, 19.5f), (0f, 0f), false, false })!;
+        Check(automatic.Azimuth == 0f && automatic.Elevation == 0f && automatic.Mode == 0f,
+            "zero corrections no longer preserve ECS automatic aim");
+
+        var aimMode = typeof(MainWindow).Assembly.GetType("AadcCommandCenter.AimCommandMode")!;
+        Check((float)aimMode.GetField("AutomaticCorrectedAim", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()! == 0f &&
+            (float)aimMode.GetField("ExistingAbsoluteAim", BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()! == 1f,
+            "aim command modes changed");
 
         var editor = (Window)Activator.CreateInstance(type, BindingFlags.NonPublic | BindingFlags.Instance,
-            null, new object[] { 7u, 135f, -5f }, null)!;
+            null, new object[] { 7u, 1.5f, -2.5f }, null)!;
         try
         {
             IEnumerable<object> Children(object parent) => parent switch
@@ -250,8 +308,18 @@ static class Checks
                     new[] { content.Content }.Concat(Children(content.Content)),
                 _ => Enumerable.Empty<object>()
             };
-            Check(Children(editor).OfType<Button>().Any(button => Equals(button.Content, "자동 계산 복원")),
-                "automatic ECS angle restore control missing");
+            var children = Children(editor).ToArray();
+            Check(children.OfType<TextBlock>().Any(text => text.Text.Contains("자동 보정 조준점 기준")) &&
+                children.OfType<TextBlock>().Any(text => text.Text == "팬 증감") &&
+                children.OfType<TextBlock>().Any(text => text.Text == "틸트 증감"),
+                "relative aim adjustment labels missing");
+            Check(children.OfType<Button>().Any(button => Equals(button.Content, "보정량 초기화")),
+                "aim adjustment reset control missing");
+            var inputs = children.OfType<TextBox>().ToArray();
+            Check(inputs.Length == 2 &&
+                float.TryParse(inputs[0].Text, out var pan) && Math.Abs(pan - 1.5f) < .01f &&
+                float.TryParse(inputs[1].Text, out var tilt) && Math.Abs(tilt + 2.5f) < .01f,
+                "saved pan/tilt adjustments were not restored in the editor");
         }
         finally { editor.Close(); }
     }

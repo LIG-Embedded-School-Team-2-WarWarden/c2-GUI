@@ -35,6 +35,17 @@ class Program
         var button = rows[2].Children.OfType<Button>().Single();
         void Click() => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         void Check(bool value, string message) { if (!value) throw new Exception(message); }
+        var storage = typeof(AadcCommandCenter.MainWindow).Assembly.GetType("AadcCommandCenter.FcsAngleOffsetStorage")!;
+        var saveOffsets = storage.GetMethod("Save", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var loadOffsets = storage.GetMethod("Load", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var offsetPath = Path.Combine(Path.GetTempPath(), "aadc-fcs-offset-" + Guid.NewGuid().ToString("N"), "offset.json");
+        saveOffsets.Invoke(null, new object[] { offsetPath, -1f, .5f });
+        var savedOffsets = (float[])loadOffsets.Invoke(null, new object[] { offsetPath })!;
+        Check(savedOffsets.SequenceEqual(new[] { -1f, .5f, 0f }), "GUI FCS angle offsets were not persisted");
+        File.WriteAllText(offsetPath, "not-json");
+        Check(((float[])loadOffsets.Invoke(null, new object[] { offsetPath })!).SequenceEqual(new float[3]),
+            "corrupt GUI FCS angle offsets did not fall back safely");
+        Directory.Delete(Path.GetDirectoryName(offsetPath)!, true);
         foreach (var bad in new[] { "word", "NaN", "Infinity", "-1" }) {
             inputs[0].Text = bad; Click(); Check(calls == 0, "invalid GUI number accepted: " + bad);
         }

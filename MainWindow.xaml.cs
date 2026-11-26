@@ -21,7 +21,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _assignmentBlinkTimer = new() { Interval = TimeSpan.FromMilliseconds(450) };
     private readonly PipeCommandClient _pipeClient = new();
     private readonly Dictionary<uint, uint> _targetFcsSelections = new();
-    private readonly Dictionary<uint, (float Azimuth, float Elevation)> _targetAimAngles = new();
+    private readonly Dictionary<uint, (float Pan, float Tilt)> _targetAimAdjustments = new();
     private readonly Dictionary<uint, int> _targetListOrder = new();
     private readonly HashSet<uint> _assignedTargets = new();
     private readonly Dictionary<uint, AssignmentView> _assignmentsByTarget = new();
@@ -892,29 +892,26 @@ public partial class MainWindow : Window
         if (sender is not Button { DataContext: AssignmentView assignment }) return;
         var target = _data.Targets.FirstOrDefault(item => item.Id == assignment.TargetId);
         if (target is null) return;
-        var fcs = _data.FcsAssets.FirstOrDefault(item => item.Id == assignment.FcsId);
-        var alreadyAimed = assignment.HasCommandState(AssignmentState.Aimed) ||
-            assignment.HasCommandState(AssignmentState.ScanPaused);
-        var current = _targetAimAngles.TryGetValue(target.Id, out var saved)
-            ? saved
-            : alreadyAimed && fcs is { IsConnected: true }
-                ? (Azimuth: fcs.AzimuthDeg, Elevation: fcs.ElevationDeg)
-                : ToFcsAimAngles(target, fcs);
+        var current = _targetAimAdjustments.TryGetValue(target.Id, out var saved)
+            ? saved : (Pan: 0f, Tilt: 0f);
 
-        var editor = new TargetAngleEditorWindow(target.Id, current.Azimuth, current.Elevation)
+        var editor = new TargetAngleEditorWindow(target.Id, current.Pan, current.Tilt)
         {
             Owner = this
         };
         if (editor.ShowDialog() != true) return;
 
-        if (editor.UseAutomatic)
-            _targetAimAngles.Remove(target.Id);
+        var clearAdjustment = editor.ClearAdjustment ||
+            (editor.PanAdjustmentDeg == 0f && editor.TiltAdjustmentDeg == 0f);
+        if (clearAdjustment)
+            _targetAimAdjustments.Remove(target.Id);
         else
-            _targetAimAngles[target.Id] = (editor.AzimuthDeg, editor.ElevationDeg);
+            _targetAimAdjustments[target.Id] = (editor.PanAdjustmentDeg, editor.TiltAdjustmentDeg);
         RefreshAssignments();
-        AddLog(editor.UseAutomatic
-            ? $"조준각 자동 계산 복원 · {target.DisplayName}"
-            : $"조준각 수동 변경 · {target.DisplayName} · 방위각 {editor.AzimuthDeg:0.0}°, 고각 {editor.ElevationDeg:0.0}°");
+        AddLog(clearAdjustment
+            ? $"조준 보정량 초기화 · {target.DisplayName} · ECS 자동 보정 조준점 사용"
+            : $"조준 보정량 변경 · {target.DisplayName} · 팬 {editor.PanAdjustmentDeg:+0.0;-0.0;0.0}°, " +
+              $"틸트 {editor.TiltAdjustmentDeg:+0.0;-0.0;0.0}°");
 
         if (assignment.HasCommandState(AssignmentState.Aimed) ||
             assignment.HasCommandState(AssignmentState.ScanPaused))
@@ -924,13 +921,62 @@ public partial class MainWindow : Window
     private (float Azimuth, float Elevation) ToFcsAimAngles(TargetRecord target, FcsAsset? fcs)
     {
         if (fcs is null) return (target.AzimuthDeg, target.ElevationDeg);
+        var offsets = CurrentFcsAngleOffsets();
+        float panOffset = offsets.Length > 0 ? offsets[0] : 0;
+        float tiltOffset = offsets.Length > 1 ? offsets[1] : 0;
+        var rdr = _data.RdrAssets.FirstOrDefault(item => item.Id == target.RdrId);
+        if (_geometryCalibration.Enabled && rdr is not null)
+        {
+            var rdrPosition = new[] { (double)rdr.PositionX, rdr.PositionY, rdr.PositionZ };
+            var fcsPosition = new[] { (double)fcs.PositionX, fcs.PositionY, fcs.PositionZ };
+            var corrected = _geometryCalibration.Angles(
+                new[] { (double)(target.LidarX - rdr.PositionX), (double)(target.LidarY - rdr.PositionY),
+                    (double)(target.LidarZ - rdr.PositionZ) },
+                new[] { (double)panOffset, (double)tiltOffset },rdrPosition,fcsPosition);
+            // GeometryCalibration returns the FCS motor PAN used by ECS. An
+            // absolute GUI override is converted back to motor PAN by ECS with
+            // +45 degrees, so send the corresponding displayed GUI azimuth.
+            return (MotorPanToGuiAzimuth(corrected.Pan), (float)corrected.Tilt);
+        }
+
         var dx = target.LidarX - fcs.PositionX;
         var dy = target.LidarY - fcs.PositionY;
-        var offsets = _cameraSettings is { Length: > 2 } ? _cameraSettings[2] : null;
-        float panOffset = offsets is { Length: > 0 } ? offsets[0] : 0;
-        float tiltOffset = offsets is { Length: > 1 } ? offsets[1] : 0;
         var azimuth = (MathF.Atan2(dx, dy) * 180f / MathF.PI + 135f + panOffset + 360f) % 360f;
         return (azimuth, target.ElevationDeg + tiltOffset);
+    }
+
+    internal static float MotorPanToGuiAzimuth(double motorPan)
+    {
+        var guiAzimuth = (float)((motorPan - 45d) % 360d);
+        if (guiAzimuth < 0) guiAzimuth += 360f;
+        return guiAzimuth;
+    }
+
+    internal static (float Azimuth, float Elevation) ApplyAimAdjustment(
+        (float Azimuth, float Elevation) correctedAim,
+        (float Pan, float Tilt) adjustment)
+    {
+        var azimuth = (correctedAim.Azimuth + adjustment.Pan) % 360f;
+        if (azimuth < 0) azimuth += 360f;
+        return (MathF.Round(azimuth, 1, MidpointRounding.AwayFromZero),
+            MathF.Round(correctedAim.Elevation + adjustment.Tilt, 1, MidpointRounding.AwayFromZero));
+    }
+
+    internal static bool HasFcsAngleOffset(IReadOnlyList<float> offsets) =>
+        offsets.Count > 0 && MathF.Abs(offsets[0]) > .0001f ||
+        offsets.Count > 1 && MathF.Abs(offsets[1]) > .0001f;
+
+    internal static (float Azimuth, float Elevation, float Mode) PrepareAimCommand(
+        (float Azimuth, float Elevation) correctedAim,
+        (float Pan, float Tilt) targetAdjustment,
+        bool hasTargetAdjustment,
+        bool hasFcsAngleOffset)
+    {
+        if (!hasTargetAdjustment && !hasFcsAngleOffset)
+            return (0f, 0f, AimCommandMode.AutomaticCorrectedAim);
+        var finalAim = ApplyAimAdjustment(correctedAim,
+            hasTargetAdjustment ? targetAdjustment : (Pan: 0f, Tilt: 0f));
+        return (finalAim.Azimuth, finalAim.Elevation, AimCommandMode.ExistingAbsoluteAim);
     }
 
     private async Task ReaimWithCurrentTargetAnglesAsync(AssignmentView assignment, TargetRecord target)
@@ -938,19 +984,26 @@ public partial class MainWindow : Window
         if (!assignment.StageCommandsEnabled || _data.Assignments.Any(row => row.IsStageCommandPending) ||
             !EnsureSharedMemoryLiveForCommand("조준 목표각 적용")) return;
         var command = assignment.IsBatch ? CommandType.AimBatchTarget : CommandType.StartManualAim;
-        bool manual = _targetAimAngles.TryGetValue(target.Id, out var angles);
+        bool hasTargetAdjustment = _targetAimAdjustments.TryGetValue(target.Id, out var adjustment);
+        var fcs = _data.FcsAssets.FirstOrDefault(item => item.Id == assignment.FcsId);
+        var fcsOffsets = CurrentFcsAngleOffsets();
+        var preparedAim = PrepareAimCommand(ToFcsAimAngles(target, fcs), adjustment,
+            hasTargetAdjustment, HasFcsAngleOffset(fcsOffsets));
         assignment.SetPendingStageCommand(command);
         RefreshAssignmentScanControls();
         try
         {
             var response = await SendPipeCommandAsync(command, target.RdrId, assignment.FcsId,
-                assignment.TargetId, "조준 목표각 적용", positionX: manual ? angles.Azimuth : 0,
-                positionY: manual ? angles.Elevation : 0, positionZ: manual ? 1 : 0);
+                assignment.TargetId, "조준 보정량 적용", positionX: preparedAim.Azimuth,
+                positionY: preparedAim.Elevation, positionZ: preparedAim.Mode);
             if (response is null) return;
             ApplyCommandResponse(response.Value);
             var result = (ResultCode)response.Value.ResultCode;
             if (result == ResultCode.Success)
-                AddLog($"조준 목표각 재적용 · {assignment.TargetName} · {(manual ? "운용자 수동값" : "ECS 자동 계산값")}");
+                AddLog($"조준 재적용 · {assignment.TargetName} · " +
+                    (preparedAim.Mode == AimCommandMode.ExistingAbsoluteAim
+                        ? $"자동 보정점 + 팬 {adjustment.Pan:+0.0;-0.0;0.0}° / 틸트 {adjustment.Tilt:+0.0;-0.0;0.0}°"
+                        : "ECS 자동 보정 조준점"));
             else ShowAlert(CommandResultText(result), "조준 목표각 적용");
         }
         finally
@@ -996,13 +1049,18 @@ public partial class MainWindow : Window
         if (!EnsureSharedMemoryLiveForCommand(stage.Label)) return;
 
         var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
-        float aimAzimuth = 0, aimElevation = 0, aimOverride = 0;
-        if ((command is CommandType.StartManualAim or CommandType.AimBatchTarget) && target is not null &&
-            _targetAimAngles.TryGetValue(target.Id, out var savedAngles))
+        float aimAzimuth = 0, aimElevation = 0;
+        float aimMode = AimCommandMode.AutomaticCorrectedAim;
+        if ((command is CommandType.StartManualAim or CommandType.AimBatchTarget) && target is not null)
         {
-            aimAzimuth = savedAngles.Azimuth;
-            aimElevation = savedAngles.Elevation;
-            aimOverride = 1;
+            bool hasTargetAdjustment = _targetAimAdjustments.TryGetValue(target.Id, out var savedAdjustment);
+            var fcs = _data.FcsAssets.FirstOrDefault(item => item.Id == assignment.FcsId);
+            var fcsOffsets = CurrentFcsAngleOffsets();
+            var preparedAim = PrepareAimCommand(ToFcsAimAngles(target, fcs), savedAdjustment,
+                hasTargetAdjustment, HasFcsAngleOffset(fcsOffsets));
+            aimAzimuth = preparedAim.Azimuth;
+            aimElevation = preparedAim.Elevation;
+            aimMode = preparedAim.Mode;
         }
         bool startingDeferred = assignment.AwaitingEcsSlot && command == CommandType.RegisterManualTarget;
         if (startingDeferred && (LegacySlotOccupied(assignment) || target?.CanAssign != true ||
@@ -1020,7 +1078,7 @@ public partial class MainWindow : Window
         {
             var response = await SendPipeCommandAsync(command, target?.RdrId ?? 1, assignment.FcsId,
                 assignment.TargetId, stage.Label, positionX: aimAzimuth, positionY: aimElevation,
-                positionZ: aimOverride);
+                positionZ: aimMode);
             if (response is null) return;
             var result = (ResultCode)response.Value.ResultCode;
             if (!startingDeferred || result == ResultCode.Success)
@@ -1319,8 +1377,11 @@ public partial class MainWindow : Window
             assignment.ShowBatchResume = ReferenceEquals(assignment, resumeRow);
             var target = _data.Targets.FirstOrDefault(x => x.Id == assignment.TargetId);
             var fcs = _data.FcsAssets.FirstOrDefault(x => x.Id == assignment.FcsId);
-            (float Azimuth, float Elevation)? aimAngles = target is null ? null : _targetAimAngles.TryGetValue(target.Id, out var saved)
-                ? saved : ToFcsAimAngles(target, fcs);
+            var correctedAim = target is null ? ((float Azimuth, float Elevation)?)null : ToFcsAimAngles(target, fcs);
+            var adjustment = target is not null && _targetAimAdjustments.TryGetValue(target.Id, out var saved)
+                ? saved : (Pan: 0f, Tilt: 0f);
+            (float Azimuth, float Elevation)? aimAngles = correctedAim is null ? null :
+                ApplyAimAdjustment(correctedAim.Value, adjustment);
             assignment.Refresh(_isSharedMemoryLive ? target : null, _isSharedMemoryLive ? fcs : null,
                 _isSharedMemoryLive, aimAngles);
         }
@@ -1898,41 +1959,41 @@ public sealed class TargetRecord : INotifyPropertyChanged
 
 internal sealed class TargetAngleEditorWindow : Window
 {
-    private readonly TextBox _azimuthInput;
-    private readonly TextBox _elevationInput;
+    private readonly TextBox _panInput;
+    private readonly TextBox _tiltInput;
 
-    internal float AzimuthDeg { get; private set; }
-    internal float ElevationDeg { get; private set; }
-    internal bool UseAutomatic { get; private set; }
+    internal float PanAdjustmentDeg { get; private set; }
+    internal float TiltAdjustmentDeg { get; private set; }
+    internal bool ClearAdjustment { get; private set; }
 
-    internal TargetAngleEditorWindow(uint targetId, float azimuth, float elevation)
+    internal TargetAngleEditorWindow(uint targetId, float panAdjustment, float tiltAdjustment)
     {
-        Title = $"TGT-{targetId} 조준각 수정";
-        Width = 340;
+        Title = $"TGT-{targetId} 조준 보정량 수정";
+        Width = 370;
         Height = 250;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(9, 20, 17));
         Foreground = new SolidColorBrush(Color.FromRgb(226, 239, 232));
 
-        _azimuthInput = CreateInput(azimuth);
-        _elevationInput = CreateInput(elevation);
+        _panInput = CreateInput(panAdjustment);
+        _tiltInput = CreateInput(tiltAdjustment);
         var root = new Grid { Margin = new Thickness(16) };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        root.Children.Add(new TextBlock { Text = "FCS 조준 목표각 (°)", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 9) });
-        AddAngleRow(root, "방위각", _azimuthInput, 1);
-        AddAngleRow(root, "고각", _elevationInput, 2);
-        var help = new TextBlock { Text = "적용하면 이 타겟만 운용자 수동값으로 조준합니다. 자동 계산으로 복원하면 ECS 영점·3D 보정을 다시 사용합니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 7, 0, 0) };
+        root.Children.Add(new TextBlock { Text = "자동 보정 조준점 기준 추가 조정 (°)", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 9) });
+        AddAngleRow(root, "팬 증감", _panInput, 1);
+        AddAngleRow(root, "틸트 증감", _tiltInput, 2);
+        var help = new TextBlock { Text = "FCS 영점·3D 보정식이 계산한 조준점에 입력값을 더합니다. +는 증가, -는 감소이며 0.0°는 추가 조정 없음입니다.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 7, 0, 0) };
         Grid.SetRow(help, 3);
         root.Children.Add(help);
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
-        var automatic = new Button { Content = "자동 계산 복원", Width = 106, Margin = new Thickness(0, 0, 6, 0) };
-        automatic.Click += (_, _) => { UseAutomatic = true; DialogResult = true; };
+        var automatic = new Button { Content = "보정량 초기화", Width = 106, Margin = new Thickness(0, 0, 6, 0) };
+        automatic.Click += (_, _) => { ClearAdjustment = true; DialogResult = true; };
         var save = new Button { Content = "적용", Width = 72, Margin = new Thickness(0, 0, 6, 0), IsDefault = true };
         save.Click += (_, _) => SaveAngles();
         var cancel = new Button { Content = "취소", Width = 72, IsCancel = true };
@@ -1965,26 +2026,26 @@ internal sealed class TargetAngleEditorWindow : Window
 
     private void SaveAngles()
     {
-        if (!TryRead(_azimuthInput, out var azimuth) || !TryRead(_elevationInput, out var elevation))
+        if (!TryRead(_panInput, out var pan) || !TryRead(_tiltInput, out var tilt))
         {
-            MessageBox.Show(this, "방위각은 0 이상 360 미만, 고각은 -30~90도 범위로 입력하세요.", "조준각 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, "팬 증감은 -180~180도, 틸트 증감은 -120~120도 범위로 입력하세요.", "조준 보정량 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        azimuth = MathF.Round(azimuth, 1, MidpointRounding.AwayFromZero);
-        elevation = MathF.Round(elevation, 1, MidpointRounding.AwayFromZero);
-        if (!IsValidAngles(azimuth, elevation))
+        pan = MathF.Round(pan, 1, MidpointRounding.AwayFromZero);
+        tilt = MathF.Round(tilt, 1, MidpointRounding.AwayFromZero);
+        if (!IsValidAdjustments(pan, tilt))
         {
-            MessageBox.Show(this, "방위각은 0 이상 360 미만, 고각은 -30~90도 범위로 입력하세요.", "조준각 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, "팬 증감은 -180~180도, 틸트 증감은 -120~120도 범위로 입력하세요.", "조준 보정량 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        AzimuthDeg = azimuth;
-        ElevationDeg = elevation;
+        PanAdjustmentDeg = pan;
+        TiltAdjustmentDeg = tilt;
         DialogResult = true;
     }
 
-    internal static bool IsValidAngles(float azimuth, float elevation) =>
-        float.IsFinite(azimuth) && azimuth is >= 0 and < 360 &&
-        float.IsFinite(elevation) && elevation is >= -30 and <= 90;
+    internal static bool IsValidAdjustments(float pan, float tilt) =>
+        float.IsFinite(pan) && pan is >= -180 and <= 180 &&
+        float.IsFinite(tilt) && tilt is >= -120 and <= 120;
 
     private static bool TryRead(TextBox input, out float value) =>
         (float.TryParse(input.Text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.CurrentCulture, out value) ||

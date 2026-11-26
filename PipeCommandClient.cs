@@ -17,6 +17,8 @@ internal enum CommandType : uint
     StageGeometryTranslation = 1112,
     StageGeometryRotation = 1113,
     CommitGeometry = 1114,
+    ReadGeometryRdrAnchor = 1115,
+    ReadGeometryFcsAnchor = 1116,
     GetStatus = 0,          // 현재 연결과 객체 할당 상태 조회
     AssignTarget = 1,       // 객체를 FCS에 할당
     CancelAssignment = 2,   // 현재 객체 할당 취소
@@ -122,6 +124,12 @@ internal struct PipeCommand
     public float PositionX; // 조준 명령: 운용자가 지정한 절대 방위각(도)
     public float PositionY; // 조준 명령: 운용자가 지정한 절대 고각(도)
     public float PositionZ; // 조준 명령: 1=운용자 절대각, 0=ECS 자동 계산(영점/3D 보정 포함)
+}
+
+internal static class AimCommandMode
+{
+    internal const float AutomaticCorrectedAim = 0f;
+    internal const float ExistingAbsoluteAim = 1f;
 }
 
 /// <summary>ECS에서 WPF로 돌려주는 40바이트 응답 구조체</summary>

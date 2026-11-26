@@ -281,7 +281,7 @@
 <StackPanel Margin="0,0,4,0"><TextBlock Text="팬 · 오른쪽 +" FontSize="11"/><TextBox x:Name="FcsPanOffsetInput" TextChanged="FcsAngleTextChanged" ToolTip="팬 보정 −180~180°"/></StackPanel>
 <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="틸트 · 위쪽 +" FontSize="11"/><TextBox x:Name="FcsTiltOffsetInput" TextChanged="FcsAngleTextChanged" ToolTip="틸트 보정 −90~90°"/></StackPanel></Grid>
 <Button x:Name="FcsAngleSaveButton" Content="각도 보정 저장" Click="FcsAngleSaveClick" Margin="0,6,0,4"/>
-<TextBlock Text="저장 후 다시 조준 · 0° 입력 시 보정 해제" TextWrapping="Wrap" FontSize="11"/>
+<TextBlock Text="GUI에 저장 · 다음 조준부터 적용 · 0° 입력 시 보정 해제" TextWrapping="Wrap" FontSize="11"/>
 <TextBlock x:Name="FcsAngleStatus" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource Green}" Margin="0,4,0,0"/>
 </StackPanel></Border></StackPanel></ScrollViewer></Border>
     </Grid></ScrollViewer>

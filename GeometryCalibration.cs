@@ -1,20 +1,39 @@
 namespace AadcCommandCenter;
 
-public sealed record GeometryCalibration(bool Enabled,double[] Translation,double[] Rotation)
+public sealed record GeometryCalibration(bool Enabled,double[] Translation,double[] Rotation,
+    double[]? RdrAnchor=null,double[]? FcsAnchor=null)
 {
     public static GeometryCalibration Identity=>new(false,new double[3],new double[3]);
-    public double[] Transform(double[] point)
+    public double[] Rotate(double[] point)
     {
         if(!Enabled)return point.ToArray();
         var r=Rotation;double theta=GeometrySolver.Norm(r);
         double a=theta<1e-8?1-theta*theta/6:Math.Sin(theta)/theta;
         double b=theta<1e-8?.5-theta*theta/24:(1-Math.Cos(theta))/(theta*theta);
         var cross=GeometrySolver.Cross(r,point);var twice=GeometrySolver.Cross(r,cross);
-        return Enumerable.Range(0,3).Select(i=>point[i]+a*cross[i]+b*twice[i]+Translation[i]).ToArray();
+        return Enumerable.Range(0,3).Select(i=>point[i]+a*cross[i]+b*twice[i]).ToArray();
     }
-    public (double Pan,double Tilt) Angles(double[] point,double[] offsets)
+    public double[] Transform(double[] point)
     {
-        var q=Transform(point);double horizontal=Math.Sqrt(q[0]*q[0]+q[1]*q[1]);
+        var rotated=Rotate(point);
+        return Enabled?Enumerable.Range(0,3).Select(i=>rotated[i]+Translation[i]).ToArray():rotated;
+    }
+    public double[] TransformInstalled(double[] point,double[] currentRdr,double[] currentFcs)
+    {
+        var transformed=Transform(point);
+        if(!Enabled||RdrAnchor is not { Length:3 } rdrAnchor||FcsAnchor is not { Length:3 } fcsAnchor)
+            return transformed;
+        var baselineChange=Enumerable.Range(0,3).Select(i=>(currentRdr[i]-currentFcs[i])-
+            (rdrAnchor[i]-fcsAnchor[i])).ToArray();
+        var correction=Rotate(baselineChange);
+        return Enumerable.Range(0,3).Select(i=>transformed[i]+correction[i]).ToArray();
+    }
+    public (double Pan,double Tilt) Angles(double[] point,double[] offsets,
+        double[]? currentRdr=null,double[]? currentFcs=null)
+    {
+        var q=currentRdr is { Length:3 } rdr&&currentFcs is { Length:3 } fcs
+            ?TransformInstalled(point,rdr,fcs):Transform(point);
+        double horizontal=Math.Sqrt(q[0]*q[0]+q[1]*q[1]);
         if(horizontal<.001)throw new InvalidOperationException("타겟이 회전축 바로 위/아래에 있어 방향을 정할 수 없습니다.");
         return ((180+Math.Atan2(q[0],q[1])*180/Math.PI+offsets[0]+720)%360,Math.Atan2(q[2],horizontal)*180/Math.PI+offsets[1]);
     }

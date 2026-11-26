@@ -18,6 +18,18 @@ internal static class GeometryChecks
         var displaced=new GeometryCalibration(true,new[]{1d,0,0},new double[3]);
         Check(Math.Abs(displaced.Angles(new[]{0d,1,0},new double[2]).Pan-225)<1e-8,"near lever arm");
         Check(Math.Abs(displaced.Angles(new[]{0d,10,0},new double[2]).Pan-185.7105931375)<1e-8,"far lever arm must differ from near");
+        var installed=new GeometryCalibration(true,new[]{.2,-.1,.05},new[]{.02,-.03,.04},
+            new[]{1d,2,.5},new[]{-1d,1,.25});
+        var local=new[]{.1,2d,.4};
+        var anchorAngles=installed.Angles(local,new double[2],new[]{1d,2,.5},new[]{-1d,1,.25});
+        var movedFcsAngles=installed.Angles(local,new double[2],new[]{1d,2,.5},new[]{-1d,-3,.25});
+        Check(Math.Abs(anchorAngles.Pan-movedFcsAngles.Pan)>.1||
+            Math.Abs(anchorAngles.Tilt-movedFcsAngles.Tilt)>.1,
+            "current RDR/FCS installation baseline did not affect 3D aim");
+        var commonShiftAngles=installed.Angles(local,new double[2],new[]{4d,0,1.5},new[]{2d,-1,1.25});
+        Check(Math.Abs(anchorAngles.Pan-commonShiftAngles.Pan)<1e-9&&
+            Math.Abs(anchorAngles.Tilt-commonShiftAngles.Tilt)<1e-9,
+            "common installation-coordinate translation changed the relative aim");
         var truth=new GeometryCalibration(true,new[]{.32,-.17,.12},new[]{.045,-.03,.055});
         double[] origin={.5,.3,.1},offsets={2,-3,0};
         uint id=1;

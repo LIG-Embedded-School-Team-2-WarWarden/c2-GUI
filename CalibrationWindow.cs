@@ -18,7 +18,7 @@ public partial class MainWindow
             if (!_isSharedMemoryLive || _data.FcsAssets.FirstOrDefault() is not { IsConnected:true })
                 throw new IOException("ECS와 FCS 연결을 확인하세요.");
             if (_data.Assignments.Any(a => a.HasAssignment)) throw new IOException("타겟 할당을 해제한 뒤 캘리브레이션을 시작하세요.");
-            var offsets=await ReadCameraGroupAsync(4);
+            var offsets=GetFcsAngleOffsets();
             uint geometryToken=(uint)Random.Shared.Next(1,int.MaxValue);
             async Task<PipeResponse> GeometryRequest(CommandType type,double[] values)
             {
@@ -35,8 +35,11 @@ public partial class MainWindow
             }
             var translation=await GeometryRequest(CommandType.ReadGeometryTranslation,new double[3]);
             var rotation=await GeometryRequest(CommandType.ReadGeometryRotation,new double[3]);
-            var originalGeometry=new GeometryCalibration(translation.FireState==1,Triple(translation),Triple(rotation));
-            if(!(await ReadCameraGroupAsync(4)).SequenceEqual(offsets))throw new IOException("각도 보정이 변경되었습니다. 창을 다시 열어주세요.");
+            var rdrAnchor=await GeometryRequest(CommandType.ReadGeometryRdrAnchor,new double[3]);
+            var fcsAnchor=await GeometryRequest(CommandType.ReadGeometryFcsAnchor,new double[3]);
+            var originalGeometry=new GeometryCalibration(translation.FireState==1,Triple(translation),Triple(rotation),
+                Triple(rdrAnchor),Triple(fcsAnchor));
+            if(!GetFcsAngleOffsets().SequenceEqual(offsets))throw new IOException("각도 보정이 변경되었습니다. 창을 다시 열어주세요.");
             async Task SaveGeometry(GeometryCalibration model)
             {
                 await GeometryRequest(CommandType.StageGeometryTranslation,model.Translation);
